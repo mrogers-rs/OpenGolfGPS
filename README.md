@@ -9,6 +9,7 @@ Vanilla TypeScript + Vite, MapLibre GL, turf.js. Works offline once a course is 
 npm install
 npm run dev        # http://localhost:5173 (use --host URL on your phone, same wifi)
 npm test           # yardage, hazards, layups, scorecard and pace tests against Allenmore data
+# The "Auburn GC (test)" button in the app looks up Auburn Golf Course (Auburn, WA) by name and remembers its id.
 npm run build      # static site in dist/
 ```
 
@@ -28,6 +29,10 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 - **Front / center / back** (`src/yardage.ts`): front and back are where the line of play crosses the green
   edge. With GPS that line runs from you to the green center; without GPS (or more than 700 yd away) it
   uses the hole's mapped line and shows yardage from the tee along the doglegs.
+- **Default drive crosshair**: on par 4s and 5s, while you're on the tee (or without GPS), the crosshair starts at
+  your drive distance (Menu → "Your drive", default 240 yd) on the line of play, slid sideways to the middle of the
+  fairway when one is mapped there (`driveTarget` in `src/arcs.ts`). Clear hides it until the next hole. The old
+  layup numbers on the center line are gone.
 - **Tap to measure**: tap the map for a draggable target showing you→target and target→center.
 - **Auto-advance** (`src/advance.ts`): moves to the next hole when you're within 35 yd of its tee and off
   the current green. Prev/next or tapping the hole number overrides; auto carries on from whatever hole

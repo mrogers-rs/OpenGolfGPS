@@ -6,18 +6,19 @@ import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { scenery3d } from './scenery3d.ts';
-import { distanceArcs } from './arcs.ts';
+import { distanceArcs, driveTarget, DEFAULT_DRIVE_YD } from './arcs.ts';
 import { holeCorridor, holeMask, insideCorridor, framing, APPROACH_YD } from './cutout.ts';
 import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
-import { hazardNumbers, layupMarks } from './hazards.ts';
+import { hazardNumbers } from './hazards.ts';
 import { type Round, newRound, markShot, undoShot, shotDistances, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
 import { initCard, renderCard } from './card.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 
-const TEST_COURSE: CourseHit = { id: 'way/23143257', name: 'Allenmore Golf Course', center: [-122.4727, 47.2391] };
+/** Test course: Auburn Golf Course, Auburn WA. Its OSM id is looked up by name the first time (then remembered). */
+const TEST_COURSE = { name: 'Auburn Golf Course', query: 'Auburn Golf Course Auburn Washington', center: [-122.2105, 47.3325] as LngLat };
 /** A hole picked more than this long ago is treated as a new round on reopen. */
 const ROUND_RESET_MS = 6 * 3600 * 1000;
 
@@ -197,6 +198,7 @@ function setCourse(c: Course, keepHole = false) {
   store.saveState(state);
   (map.getSource('course') as GeoJSONSource).setData(c.features);
   sceneryAll = scenery3d(c);
+  fairwayPolys = c.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
   target = null;
   if (player) {
     const at = holeAtStart(c.holes, player);
@@ -208,6 +210,12 @@ function setCourse(c: Course, keepHole = false) {
 
 /** All raised trees for the course; the hole cutout shows only the ones on the current hole. */
 let sceneryAll: GeoJSON.FeatureCollection = turf.featureCollection([]);
+/** Fairway outlines, for centering the default drive crosshair. */
+let fairwayPolys: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
+/** The crosshair on screen: yours, or the default drive spot. */
+let shownTarget: LngLat | null = null;
+/** You cleared the crosshair on this hole: don't put the default one back until the next hole. */
+let targetCleared = false;
 
 /** Darkens everything but the current hole (when the cutout is on) and keeps raised trees to the hole. */
 function updateCutout(h: Hole) {
@@ -230,6 +238,7 @@ function upgradeCourse(c: Course) {
       course = fresh;
       (map.getSource('course') as GeoJSONSource).setData(fresh.features);
       sceneryAll = scenery3d(fresh);
+      fairwayPolys = fresh.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
       showHole(false);
     })
     .catch(() => { /* try again next time */ })
@@ -247,6 +256,7 @@ function goHole(i: number, _manual: boolean) {
   state.holeSetAt = Date.now();
   store.saveState(state);
   target = null;
+  targetCleared = false;
   greenView = false;
   noteArrival();
   showHole(true);
@@ -288,7 +298,15 @@ function playBearing(from: LngLat, to: LngLat) {
 /** Room the overlays (hole card, tool buttons, shot bar) leave for the hole. */
 function fitPadding() {
   // Generous margins so the hole sits clear of the hole card, tool buttons and screen edges.
-  return wide() ? { top: 128, bottom: 72, left: 56, right: 96 } : { top: 150, bottom: 72, left: 52, right: 88 };
+  // Measured from the overlays, since they grow on big screens.
+  const box = map.getContainer().getBoundingClientRect();
+  const card = document.getElementById('holecard')?.getBoundingClientRect();
+  const tools = document.getElementById('tools')?.getBoundingClientRect();
+  const cardBottom = card && card.height ? card.bottom - box.top : 110;
+  const toolsW = tools && tools.width ? box.right - tools.left : 76;
+  return wide()
+    ? { top: Math.max(96, cardBottom * 0.75), bottom: 72, left: 56, right: toolsW + 24 }
+    : { top: cardBottom + 28, bottom: 72, left: 52, right: toolsW + 16 };
 }
 
 /**
@@ -430,7 +448,10 @@ function render() {
   renderShots(h);
   renderPace();
 
-  if (target) {
+  // Your crosshair if you placed one, else the default drive spot from the tee (par 4/5) unless you cleared it.
+  shownTarget = target ?? (!targetCleared && !greenView ? driveTarget(h, fairwayPolys, me, state.drive ?? DEFAULT_DRIVE_YD) : null);
+  if (shownTarget) {
+    const target = shownTarget;
     const m = measure(h, player, target);
     const to = pin ?? h.center;
     const rest = yd(target, to);
@@ -458,7 +479,7 @@ function renderArcs(h: Hole, me: LngLat | null) {
   const arcs = greenView || !state.hazards ? [] : distanceArcs(h, me);
   (map.getSource('arcs') as GeoJSONSource | undefined)?.setData(turf.featureCollection(arcs.map((a) => turf.lineString(a.line, { color: a.color }))));
   // While a target is down, keep its yardages the clearest thing on screen.
-  if (target) { arcLabels([]); layupLabels([]); return; }
+  if (shownTarget) { arcLabels([]); return; }
   arcLabels(arcs.map((a) => ({ at: a.label, offset: [a.side === 'R' ? 16 : -16, 0] as [number, number], html: `<span style="background:${a.color}">${a.yds}</span>` })));
 }
 
@@ -468,7 +489,7 @@ function renderPinLine(h: Hole, me: LngLat | null, pin: LngLat | null | undefine
   const near = me && !greenView && yd(me, h.center) <= APPROACH_YD;
   (map.getSource('pinline') as GeoJSONSource | undefined)?.setData(near ? turf.lineString([me!, to]) : turf.featureCollection([]));
   // The measure legs replace the dashed line of play while a target is down.
-  map.setLayoutProperty('hole-line', 'visibility', near || target ? 'none' : 'visible');
+  map.setLayoutProperty('hole-line', 'visibility', near || shownTarget ? 'none' : 'visible');
   if (!near) { pinLabel.remove(); return; }
   const d = yd(me!, to);
   // Just short of the pin, so it sits on the green close-up.
@@ -487,8 +508,7 @@ function renderHazards(h: Hole, me: LngLat | null) {
   // Labels sit beside the hazard, away from the line of play (the map is turned so you face the green).
   hazardLabels(hz.map((z) => ({ at: z.at, extra: z.kind, offset: [z.side === 'L' ? -26 : z.side === 'R' ? 26 : 0, 0] as [number, number], html: `<b>${fmt(z.reach)}</b><i>${fmt(z.carry)}</i>` })));
   const toGreen = me ? yd(me, h.center) : Infinity;
-  const lay = h.par === 3 ? [] : layupMarks(h, me).filter((l) => l.toGreen < toGreen - 20);
-  layupLabels(lay.map((l) => ({ at: l.at, html: me ? `${l.toGreen}<small>${fmt(yd(me, l.at))}</small>` : String(l.toGreen) })));
+  layupLabels([]); // no numbers on the center line (the crosshair and arcs cover it)
 }
 
 function renderGreenInfo(h: Hole, frontPt: LngLat, backPt: LngLat) {
@@ -642,7 +662,7 @@ window.addEventListener('resize', () => {
 $('prev').onclick = () => goHole(state.hole - 1, true);
 $('next').onclick = () => goHole(state.hole + 1, true);
 $('recenter').onclick = () => { const h = hole(); if (h) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); } };
-$('m-clear').onclick = () => { target = null; render(); };
+$('m-clear').onclick = () => { target = null; targetCleared = true; render(); };
 $('greenview').onclick = () => { const h = hole(); if (!h) return; greenView = !greenView; target = null; showHole(true); };
 $('fly').onclick = () => { if (flying) flying = false; else flyover(); };
 $('shot').onclick = () => {
@@ -717,6 +737,7 @@ function openSheet() {
   $<HTMLInputElement>('sim').checked = sim;
   $<HTMLInputElement>('hazards').checked = state.hazards !== false;
   $<HTMLSelectElement>('pace-target').value = String(state.paceTarget ?? DEFAULT_PACE_MIN);
+  $<HTMLSelectElement>('drive').value = String(state.drive ?? DEFAULT_DRIVE_YD);
   sheet.showModal();
 }
 
@@ -828,7 +849,24 @@ $('near').onclick = () => {
   if (player) return go(player);
   navigator.geolocation.getCurrentPosition((pos) => go([pos.coords.longitude, pos.coords.latitude]), (err) => msg(err.message), { timeout: 15000 });
 };
-$('test-course').onclick = () => openCourse(TEST_COURSE);
+$('test-course').onclick = async () => {
+  let id = '';
+  try { id = localStorage.getItem('testCourseId') ?? ''; } catch { /* ignore */ }
+  if (!id) {
+    msg(`Finding ${TEST_COURSE.name}…`);
+    try {
+      let found = await searchCourses(TEST_COURSE.query);
+      if (!found.length) found = await searchCourses(TEST_COURSE.name);
+      const hits = found.sort((a, b) => turf.distance(a.center, TEST_COURSE.center) - turf.distance(b.center, TEST_COURSE.center));
+      if (!hits.length || turf.distance(hits[0].center, TEST_COURSE.center) > 15) return msg(`Couldn't find ${TEST_COURSE.name} in OpenStreetMap.`, { label: 'Try again', run: () => $('test-course').click() });
+      id = hits[0].id;
+      try { localStorage.setItem('testCourseId', id); } catch { /* ignore */ }
+    } catch (e) {
+      return msg((e as Error).message, { label: 'Try again', run: () => $('test-course').click() });
+    }
+  }
+  openCourse({ id, name: TEST_COURSE.name, center: TEST_COURSE.center });
+};
 $('refresh').onclick = () => { if (course) openCourse({ id: course.id, name: course.name, center: [0, 0] }, true); };
 
 $('dl-tiles').onclick = async () => {
@@ -913,6 +951,11 @@ $<HTMLInputElement>('cutout').onchange = (e) => {
   const h = hole();
   if (h) updateCutout(h);
   applyView();
+};
+$<HTMLSelectElement>('drive').onchange = (e) => {
+  state.drive = Number((e.target as HTMLSelectElement).value);
+  store.saveState(state);
+  render();
 };
 $<HTMLInputElement>('hazards').onchange = (e) => { state.hazards = (e.target as HTMLInputElement).checked; store.saveState(state); render(); };
 $<HTMLSelectElement>('pace-target').onchange = (e) => {

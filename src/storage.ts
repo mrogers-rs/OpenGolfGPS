@@ -43,6 +43,8 @@ export interface AppState {
   view?: MapView;
   /** Hole cutout: darken everything but the current hole (default on). */
   cutout?: boolean;
+  /** Your usual drive (yards), for the default tee-shot crosshair. */
+  drive?: number;
 }
 export type MapView = '3d' | '2d' | 'sat';
 export function loadState(): AppState {

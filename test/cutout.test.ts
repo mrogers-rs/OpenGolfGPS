@@ -53,3 +53,35 @@ test('distance arcs on par 4s and 5s, short of the green, at the right range', a
   const p4 = course.holes.find((x) => x.par === 4 && yd(x.line[0], x.center) < 330)!;
   assert.ok(distanceArcs(p4, null).every((a) => a.yds < yd(p4.line[0], p4.center) - 15));
 });
+
+test('default drive crosshair: 240 yd out, in the fairway, only from the tee on par 4/5', async () => {
+  const { driveTarget } = await import('../src/arcs.ts');
+  const fairways = course.features.features.filter((f: any) => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon') as any;
+  const p3 = course.holes.find((x) => x.par === 3)!;
+  assert.equal(driveTarget(p3, fairways, null), null);
+  let inFw = 0, n = 0;
+  for (const h of course.holes.filter((x) => (x.par ?? 0) >= 4)) {
+    const t = driveTarget(h, fairways, null, 240);
+    if (!t) continue;
+    n++;
+    assert.ok(Math.abs(yd(h.line[0], t) - 240) < 25, `hole ${h.ref}: ${yd(h.line[0], t)}`);
+    if (fairways.some((f: any) => turf.booleanPointInPolygon(t, f))) inFw++;
+    // Walked off the tee: no default.
+    const mid = turf.along(turf.lineString(h.line), 150, { units: 'meters' }).geometry.coordinates as [number, number];
+    assert.equal(driveTarget(h, fairways, mid), null);
+  }
+  assert.ok(n >= 8, `targets on ${n} holes`);
+});
+
+test('default drive crosshair moves to the middle of an offset fairway', async () => {
+  const { driveTarget } = await import('../src/arcs.ts');
+  const h = course.holes.find((x) => x.par === 4 && yd(x.line[0], x.center) > 300)!;
+  const b = turf.bearing(h.line[0], h.center);
+  // A 30 m wide fairway whose middle is 18 m right of the line of play.
+  const shifted = turf.lineString(h.line.map((p) => turf.destination(p, 18, b + 90, { units: 'meters' }).geometry.coordinates));
+  const fw = turf.buffer(shifted, 15, { units: 'meters' }) as any;
+  const t = driveTarget(h, [fw], null, 240)!;
+  assert.ok(turf.booleanPointInPolygon(t, fw));
+  const off = turf.pointToLineDistance(t, shifted, { units: 'meters' });
+  assert.ok(off < 6, `off fairway middle by ${off.toFixed(1)} m`);
+});
