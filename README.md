@@ -9,6 +9,7 @@ Vanilla TypeScript + Vite, MapLibre GL, turf.js. Works offline once a course is 
 npm install
 npm run dev        # http://localhost:5173 (use --host URL on your phone, same wifi)
 npm test           # yardage, hazards, layups, scorecard and pace tests against Allenmore data
+# The "Auburn GC (test)" button in the app looks up Auburn Golf Course (Auburn, WA) by name and remembers its id.
 npm run build      # static site in dist/
 ```
 
@@ -28,6 +29,10 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 - **Front / center / back** (`src/yardage.ts`): front and back are where the line of play crosses the green
   edge. With GPS that line runs from you to the green center; without GPS (or more than 700 yd away) it
   uses the hole's mapped line and shows yardage from the tee along the doglegs.
+- **Default drive crosshair**: on par 4s and 5s, while you're on the tee (or without GPS), the crosshair starts at
+  your drive distance (Menu → "Your drive", default 240 yd) on the line of play, slid sideways to the middle of the
+  fairway when one is mapped there (`driveTarget` in `src/arcs.ts`). Clear hides it until the next hole. The old
+  layup numbers on the center line are gone.
 - **Tap to measure**: tap the map for a draggable target showing you→target and target→center.
 - **Auto-advance** (`src/advance.ts`): moves to the next hole when you're within 35 yd of its tee and off
   the current green. Prev/next or tapping the hole number overrides; auto carries on from whatever hole
@@ -66,6 +71,17 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
   (portrait) and left to right when wider (landscape), and zoomed so tee to green fills the screen around the
   overlays (`fitPoints` in `src/main.ts`; turning the device re-fits). Landscape uses a gentler 3D tilt and a
   narrower yardage column; phones on their side get a compact header, numbers and a one-row tab bar.
+- **Hole cutout and zoom as you play** (`src/cutout.ts`): everything outside the current hole (line of play
+  ±42 m, green ±20 m) is darkened, and raised trees are limited to the hole (Menu → "Cut out the hole" turns it off).
+  Landscape runs the hole from the bottom-left to the top-right corner. With GPS on the hole, the view frames only
+  what's left (you → green) and re-frames every ~10 yd as you walk; inside 100 yd it becomes a flat close-up of the
+  green with a line to the pin and its yardage. Panning or zooming by hand pauses this until Recenter or the next hole.
+- **Distance arcs** (`src/arcs.ts`, par 4s and 5s): 200 (blue), 225 (green), 250 (yellow), 270 (orange) and
+  300 (red) yd arcs from the tee, or from you once GPS puts you on the hole, centered on the line of play (follows
+  doglegs) and left out when they'd land within 15 yd of the green. Shown with the hazard numbers setting.
+- **Tap to measure**: tap the hole to drop a crosshair (drag it to move). Thick legs run from you (or the tee) to
+  the crosshair in yellow and on to the pin or green center in white, each with a big yardage halfway along. The
+  dashed line, layup and arc labels step back while it's down; "Clear" removes it.
 - **Loading bar**: opening or refreshing a course shows a progress bar through each stage (find the course,
   download, build holes, save, build 3D scenery). Overpass sends no size, so the download stage eases toward
   its end by bytes received. Offline map downloads use the same bar.

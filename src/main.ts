@@ -6,16 +6,19 @@ import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { scenery3d } from './scenery3d.ts';
+import { distanceArcs, driveTarget, DEFAULT_DRIVE_YD } from './arcs.ts';
+import { holeCorridor, holeMask, insideCorridor, framing, APPROACH_YD } from './cutout.ts';
 import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
-import { hazardNumbers, layupMarks } from './hazards.ts';
+import { hazardNumbers } from './hazards.ts';
 import { type Round, newRound, markShot, undoShot, shotDistances, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
 import { initCard, renderCard } from './card.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 
-const TEST_COURSE: CourseHit = { id: 'way/23143257', name: 'Allenmore Golf Course', center: [-122.4727, 47.2391] };
+/** Test course: Auburn Golf Course, Auburn WA. Its OSM id is looked up by name the first time (then remembered). */
+const TEST_COURSE = { name: 'Auburn Golf Course', query: 'Auburn Golf Course Auburn Washington', center: [-122.2105, 47.3325] as LngLat };
 /** A hole picked more than this long ago is treated as a new round on reopen. */
 const ROUND_RESET_MS = 6 * 3600 * 1000;
 
@@ -54,6 +57,9 @@ const map = new maplibregl.Map({
       measure: { type: 'geojson', data: turf.featureCollection([]) },
       shots: { type: 'geojson', data: turf.featureCollection([]) },
       scenery3d: { type: 'geojson', data: turf.featureCollection([]) },
+      cutout: { type: 'geojson', data: turf.featureCollection([]) },
+      pinline: { type: 'geojson', data: turf.featureCollection([]) },
+      arcs: { type: 'geojson', data: turf.featureCollection([]) },
     },
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
@@ -82,11 +88,18 @@ const map = new maplibregl.Map({
       { id: 'tree', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#2e7432', 'circle-stroke-color': '#1d5221', 'circle-stroke-width': 1, 'circle-radius': TREE_R } },
       { id: 'trees3d', type: 'fill-extrusion', source: 'scenery3d', layout: { visibility: 'none' }, paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.97, 'fill-extrusion-vertical-gradient': true } },
       line('green-line', 'green', '#fff', 1.5),
+      // Hole cutout: everything outside the hole and its margin is darkened (raised trees are filtered to the hole instead); above other holes' green outlines.
+      { id: 'cutout', type: 'fill', source: 'cutout', layout: { visibility: 'none' }, paint: { 'fill-color': '#040805', 'fill-opacity': 0.9 } },
+      { id: 'cutout-edge', type: 'line', source: 'cutout', layout: { visibility: 'none', 'line-join': 'round' }, paint: { 'line-color': '#a8d8ae', 'line-opacity': 0.45, 'line-width': 1.5, 'line-blur': 0.5 } },
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
+      { id: 'arcs', type: 'line', source: 'arcs', layout: { 'line-cap': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 2.5, 'line-opacity': 0.9 } },
       { id: 'hole-line', type: 'line', source: 'hole', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 2] } },
       { id: 'shot-line', type: 'line', source: 'shots', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ff7a1a', 'line-width': 2.5 } },
       { id: 'shot-pt', type: 'circle', source: 'shots', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#ff7a1a', 'circle-stroke-color': '#000', 'circle-stroke-width': 1.5 } },
-      { id: 'measure-line', type: 'line', source: 'measure', paint: { 'line-color': '#ffd400', 'line-width': 3 } },
+      { id: 'pinline', type: 'line', source: 'pinline', layout: { 'line-cap': 'round' }, paint: { 'line-color': '#fff', 'line-width': 2.5, 'line-opacity': 0.95 } },
+      // Tap-to-measure: thick legs (you -> target in yellow, target -> pin in white) on a dark casing.
+      { id: 'measure-casing', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.55 } },
+      { id: 'measure-line', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['match', ['get', 'leg'], 'to', '#ffd400', '#ffffff'], 'line-width': 5 } },
     ],
   },
   center: TEST_COURSE.center,
@@ -106,10 +119,11 @@ function line(id: string, kind: string, color: string, width: any, dash?: number
 }
 
 const playerMarker = new maplibregl.Marker({ element: el('dot-player') });
-const targetMarker = new maplibregl.Marker({ element: el('dot-target'), draggable: true });
+const targetMarker = new maplibregl.Marker({ element: crosshair(), draggable: true });
 const flagMarker = new maplibregl.Marker({ element: el('flag', '⛳'), anchor: 'bottom-left', offset: [-4, 0] });
 const frontMarker = new maplibregl.Marker({ element: el('edge') });
 const backMarker = new maplibregl.Marker({ element: el('edge') });
+const pinLabel = new maplibregl.Marker({ element: el('pinlbl') });
 
 /** A reusable set of HTML label markers (hazards, layups). */
 function markerPool(cls: string) {
@@ -123,12 +137,23 @@ function markerPool(cls: string) {
       if (e.innerHTML !== it.html) e.innerHTML = it.html;
       e.classList.toggle('bunker', it.extra === 'bunker');
       e.classList.toggle('water', it.extra === 'water');
+      e.classList.toggle('rest', it.extra === 'rest');
       m.setOffset(it.offset ?? [0, 0]).setLngLat(it.at).addTo(map);
     });
   };
 }
 const hazardLabels = markerPool('hz');
 const layupLabels = markerPool('lay');
+const arcLabels = markerPool('arclbl');
+const legLabels = markerPool('leglbl');
+
+/** The tap-to-measure target: a crosshair with a red bull's-eye (drag it to move). */
+function crosshair() {
+  const d = document.createElement('div');
+  d.className = 'crosshair';
+  d.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="13" fill="rgba(0,0,0,.35)" stroke="#fff" stroke-width="3.5"/><path d="M24 2v12M24 34v12M2 24h12M34 24h12" stroke="#000" stroke-width="6" stroke-linecap="round"/><path d="M24 3v11M24 34v11M3 24h11M34 24h11" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="24" cy="24" r="5" fill="#ff2d2d" stroke="#fff" stroke-width="2"/></svg>';
+  return d;
+}
 
 function el(cls: string, text = '') {
   const d = document.createElement('div');
@@ -172,7 +197,8 @@ function setCourse(c: Course, keepHole = false) {
   if (!keepHole || fresh || state.hole >= c.holes.length) state.hole = 0;
   store.saveState(state);
   (map.getSource('course') as GeoJSONSource).setData(c.features);
-  (map.getSource('scenery3d') as GeoJSONSource).setData(scenery3d(c));
+  sceneryAll = scenery3d(c);
+  fairwayPolys = c.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
   target = null;
   if (player) {
     const at = holeAtStart(c.holes, player);
@@ -180,6 +206,23 @@ function setCourse(c: Course, keepHole = false) {
   }
   showHole(true);
   upgradeCourse(c);
+}
+
+/** All raised trees for the course; the hole cutout shows only the ones on the current hole. */
+let sceneryAll: GeoJSON.FeatureCollection = turf.featureCollection([]);
+/** Fairway outlines, for centering the default drive crosshair. */
+let fairwayPolys: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
+/** The crosshair on screen: yours, or the default drive spot. */
+let shownTarget: LngLat | null = null;
+/** You cleared the crosshair on this hole: don't put the default one back until the next hole. */
+let targetCleared = false;
+
+/** Darkens everything but the current hole (when the cutout is on) and keeps raised trees to the hole. */
+function updateCutout(h: Hole) {
+  const on = state.cutout !== false;
+  const corridor = holeCorridor(h);
+  (map.getSource('cutout') as GeoJSONSource).setData(on ? holeMask(corridor) : turf.featureCollection([]));
+  (map.getSource('scenery3d') as GeoJSONSource).setData(on ? turf.featureCollection(insideCorridor(sceneryAll.features, corridor)) : sceneryAll);
 }
 
 /** Courses saved by an older version lack scenery: quietly re-fetch them when online. */
@@ -194,7 +237,8 @@ function upgradeCourse(c: Course) {
       if (course?.id !== fresh.id) return;
       course = fresh;
       (map.getSource('course') as GeoJSONSource).setData(fresh.features);
-      (map.getSource('scenery3d') as GeoJSONSource).setData(scenery3d(fresh));
+      sceneryAll = scenery3d(fresh);
+      fairwayPolys = fresh.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
       showHole(false);
     })
     .catch(() => { /* try again next time */ })
@@ -212,6 +256,7 @@ function goHole(i: number, _manual: boolean) {
   state.holeSetAt = Date.now();
   store.saveState(state);
   target = null;
+  targetCleared = false;
   greenView = false;
   noteArrival();
   showHole(true);
@@ -225,39 +270,78 @@ function showHole(fit: boolean) {
   $('holemeta').innerHTML = [h.par && `<b>Par ${h.par}</b>`, `${len} yds`, h.handicap && `HCP ${h.handicap}`].filter(Boolean).join('<i>·</i>');
   (map.getSource('hole') as GeoJSONSource).setData(turf.lineString(h.line));
   flagMarker.setLngLat(pinOf(h) ?? h.pin ?? h.center).addTo(map);
+  updateCutout(h);
   if (map.getLayer('trees3d')) applyView();
-  if (fit) greenView ? fitGreen(h) : fitHole(h);
+  if (fit) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); }
   render();
 }
 
-/** Tee at the bottom, green at the top. Includes you if you're on this hole. */
 /** True when the map is wider than tall: holes then run left to right instead of bottom to top. */
 function wide() {
   const { clientWidth: w, clientHeight: h } = map.getContainer();
   return w > h * 1.05;
 }
 
-/** Map bearing that puts `from -> to` pointing up the screen (portrait) or to the right (landscape). */
+/**
+ * Map bearing that puts `from -> to` pointing up the screen (portrait), or from the bottom-left corner
+ * toward the top-right corner of the open map area (landscape).
+ */
 function playBearing(from: LngLat, to: LngLat) {
   const b = turf.bearing(from, to);
-  return wide() ? b - 90 : b;
+  if (!wide()) return b;
+  const { clientWidth: w, clientHeight: h } = map.getContainer();
+  const pad = fitPadding();
+  const up = (Math.atan2(h - pad.top - pad.bottom, w - pad.left - pad.right) * 180) / Math.PI; // diagonal, degrees above horizontal
+  return b - (90 - up);
 }
 
 /** Room the overlays (hole card, tool buttons, shot bar) leave for the hole. */
 function fitPadding() {
-  return wide() ? { top: 118, bottom: 56, left: 24, right: 76 } : { top: 124, bottom: 52, left: 24, right: 72 };
+  // Generous margins so the hole sits clear of the hole card, tool buttons and screen edges.
+  // Measured from the overlays, since they grow on big screens.
+  const box = map.getContainer().getBoundingClientRect();
+  const card = document.getElementById('holecard')?.getBoundingClientRect();
+  const tools = document.getElementById('tools')?.getBoundingClientRect();
+  const cardBottom = card && card.height ? card.bottom - box.top : 110;
+  const toolsW = tools && tools.width ? box.right - tools.left : 76;
+  return wide()
+    ? { top: Math.max(96, cardBottom * 0.75), bottom: 72, left: 56, right: toolsW + 24 }
+    : { top: cardBottom + 28, bottom: 72, left: 52, right: toolsW + 16 };
 }
 
-/** Hole view: tee to green filling the screen, running up (portrait) or across (landscape). */
+/**
+ * Hole view. With no usable position: the whole hole, tee to green. On the hole: just what's left, from you
+ * to the green, so it zooms in as you walk. Near the green: a close-up of the green, faced from where you are.
+ * `animate` glides there (used while following you) instead of jumping.
+ */
 const TILT = 50;
 const TILT_WIDE = 32;
-function fitHole(h: Hole) {
-  const pts: LngLat[] = [...h.line, ...(h.green ?? [])];
-  if (player && turf.distance(player, h.center, { units: 'meters' }) < 640) pts.push(player);
-  const bearing = playBearing(h.line[0], h.center);
-  const pitch = state.view === '3d' && !greenView ? (wide() ? TILT_WIDE : TILT) : 0;
-  fitPoints(pts, bearing, pitch, fitPadding(), 19);
+let lastFitFrom: LngLat | null = null;
+/** You panned or zoomed by hand: stop following until the next hole or Recenter. */
+let userMoved = false;
+function fitHole(h: Hole, animate = false) {
+  const f = framing(h, usablePlayer(h));
+  const bearing = playBearing(f.from, h.center);
+  const pitch = state.view === '3d' && !greenView && f.mode !== 'approach' ? (wide() ? TILT_WIDE : TILT) : 0;
+  const before = animate ? { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() } : null;
+  fitPoints(f.pts, bearing, pitch, fitPadding(), f.mode === 'approach' ? 20.5 : 19);
+  lastFitFrom = player;
+  if (before) {
+    const after = { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+    map.jumpTo(before);
+    map.easeTo({ ...after, duration: 900 });
+  }
 }
+
+/** Re-frames the hole as you walk (every ~10 yd), unless you've moved the map yourself. */
+function follow() {
+  const h = hole();
+  if (!h || !player || greenView || flying || target || userMoved) return;
+  if (lastFitFrom && yd(lastFitFrom, player) < 10) return;
+  fitHole(h, true);
+}
+map.on('dragstart', () => { userMoved = true; });
+map.on('zoomstart', (e) => { if ((e as any).originalEvent) userMoved = true; });
 
 /**
  * Rotates to `bearing`, tilts to `pitch`, then zooms and pans until the points just fill the padded screen.
@@ -298,7 +382,7 @@ function fitGreen(h: Hole) {
   const from = usablePlayer(h) ?? h.line[Math.max(0, h.line.length - 2)];
   const bearing = playBearing(from, h.center);
   const pts = turf.coordAll(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as LngLat[];
-  fitPoints(pts, bearing, 0, wide() ? { top: 70, bottom: 40, left: 40, right: 80 } : { top: 70, bottom: 40, left: 40, right: 70 }, 21);
+  fitPoints(pts, bearing, 0, wide() ? { top: 90, bottom: 60, left: 60, right: 100 } : { top: 130, bottom: 60, left: 50, right: 86 }, 21);
 }
 
 // ---------- Flyover ----------
@@ -357,23 +441,61 @@ function render() {
     gps.className = accuracy <= 10 ? 'good' : 'poor';
   }
 
+  renderPinLine(h, me, pin);
   renderHazards(h, me);
+  renderArcs(h, me);
   renderGreenInfo(h, n.frontPt, n.backPt);
   renderShots(h);
   renderPace();
 
-  if (target) {
+  // Your crosshair if you placed one, else the default drive spot from the tee (par 4/5) unless you cleared it.
+  shownTarget = target ?? (!targetCleared && !greenView ? driveTarget(h, fairwayPolys, me, state.drive ?? DEFAULT_DRIVE_YD) : null);
+  if (shownTarget) {
+    const target = shownTarget;
     const m = measure(h, player, target);
+    const to = pin ?? h.center;
+    const rest = yd(target, to);
     $('measure').hidden = false;
-    $('m-to').textContent = fmt(m.toTarget);
-    $('m-then').textContent = fmt(m.targetToCenter);
     targetMarker.setLngLat(target).addTo(map);
-    (map.getSource('measure') as GeoJSONSource).setData(turf.lineString([m.from, target, h.center]));
+    (map.getSource('measure') as GeoJSONSource).setData(turf.featureCollection([
+      turf.lineString([m.from, target], { leg: 'to' }),
+      turf.lineString([target, to], { leg: 'rest' }),
+    ]));
+    // Big yardages halfway along each leg.
+    legLabels([
+      { at: turf.midpoint(m.from, target).geometry.coordinates as LngLat, extra: 'to', html: `<b>${fmt(m.toTarget)}</b>` },
+      { at: turf.midpoint(target, to).geometry.coordinates as LngLat, extra: 'rest', html: `<b>${fmt(rest)}</b>` },
+    ]);
   } else {
     $('measure').hidden = true;
     targetMarker.remove();
+    legLabels([]);
     (map.getSource('measure') as GeoJSONSource | undefined)?.setData(turf.featureCollection([]));
   }
+}
+
+/** Drive arcs (200-300 yd) on par 4s and 5s, from the tee or from you. Hidden in green view and close to the green. */
+function renderArcs(h: Hole, me: LngLat | null) {
+  const arcs = greenView || !state.hazards ? [] : distanceArcs(h, me);
+  (map.getSource('arcs') as GeoJSONSource | undefined)?.setData(turf.featureCollection(arcs.map((a) => turf.lineString(a.line, { color: a.color }))));
+  // While a target is down, keep its yardages the clearest thing on screen.
+  if (shownTarget) { arcLabels([]); return; }
+  arcLabels(arcs.map((a) => ({ at: a.label, offset: [a.side === 'R' ? 16 : -16, 0] as [number, number], html: `<span style="background:${a.color}">${a.yds}</span>` })));
+}
+
+/** Near the green: a line from you to the pin with the yardage on it. */
+function renderPinLine(h: Hole, me: LngLat | null, pin: LngLat | null | undefined) {
+  const to = pin ?? h.center;
+  const near = me && !greenView && yd(me, h.center) <= APPROACH_YD;
+  (map.getSource('pinline') as GeoJSONSource | undefined)?.setData(near ? turf.lineString([me!, to]) : turf.featureCollection([]));
+  // The measure legs replace the dashed line of play while a target is down.
+  map.setLayoutProperty('hole-line', 'visibility', near || shownTarget ? 'none' : 'visible');
+  if (!near) { pinLabel.remove(); return; }
+  const d = yd(me!, to);
+  // Just short of the pin, so it sits on the green close-up.
+  const back = Math.min(d * 0.9144 * 0.45, 22);
+  pinLabel.getElement().textContent = fmt(d);
+  pinLabel.setLngLat(turf.destination(to, back, turf.bearing(to, me!), { units: 'meters' }).geometry.coordinates as LngLat).addTo(map);
 }
 
 function usablePlayer(h: Hole): LngLat | null {
@@ -386,8 +508,7 @@ function renderHazards(h: Hole, me: LngLat | null) {
   // Labels sit beside the hazard, away from the line of play (the map is turned so you face the green).
   hazardLabels(hz.map((z) => ({ at: z.at, extra: z.kind, offset: [z.side === 'L' ? -26 : z.side === 'R' ? 26 : 0, 0] as [number, number], html: `<b>${fmt(z.reach)}</b><i>${fmt(z.carry)}</i>` })));
   const toGreen = me ? yd(me, h.center) : Infinity;
-  const lay = h.par === 3 ? [] : layupMarks(h, me).filter((l) => l.toGreen < toGreen - 20);
-  layupLabels(lay.map((l) => ({ at: l.at, html: me ? `${l.toGreen}<small>${fmt(yd(me, l.at))}</small>` : String(l.toGreen) })));
+  layupLabels([]); // no numbers on the center line (the crosshair and arcs cover it)
 }
 
 function renderGreenInfo(h: Hole, frontPt: LngLat, backPt: LngLat) {
@@ -503,6 +624,7 @@ function onPosition(p: LngLat, acc: number) {
     }
   }
   render();
+  follow();
 }
 
 function startGps() {
@@ -539,8 +661,8 @@ window.addEventListener('resize', () => {
 // ---------- Controls ----------
 $('prev').onclick = () => goHole(state.hole - 1, true);
 $('next').onclick = () => goHole(state.hole + 1, true);
-$('recenter').onclick = () => { const h = hole(); if (h) fitHole(h); };
-$('m-clear').onclick = () => { target = null; render(); };
+$('recenter').onclick = () => { const h = hole(); if (h) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); } };
+$('m-clear').onclick = () => { target = null; targetCleared = true; render(); };
 $('greenview').onclick = () => { const h = hole(); if (!h) return; greenView = !greenView; target = null; showHole(true); };
 $('fly').onclick = () => { if (flying) flying = false; else flyover(); };
 $('shot').onclick = () => {
@@ -615,6 +737,7 @@ function openSheet() {
   $<HTMLInputElement>('sim').checked = sim;
   $<HTMLInputElement>('hazards').checked = state.hazards !== false;
   $<HTMLSelectElement>('pace-target').value = String(state.paceTarget ?? DEFAULT_PACE_MIN);
+  $<HTMLSelectElement>('drive').value = String(state.drive ?? DEFAULT_DRIVE_YD);
   sheet.showModal();
 }
 
@@ -726,7 +849,24 @@ $('near').onclick = () => {
   if (player) return go(player);
   navigator.geolocation.getCurrentPosition((pos) => go([pos.coords.longitude, pos.coords.latitude]), (err) => msg(err.message), { timeout: 15000 });
 };
-$('test-course').onclick = () => openCourse(TEST_COURSE);
+$('test-course').onclick = async () => {
+  let id = '';
+  try { id = localStorage.getItem('testCourseId') ?? ''; } catch { /* ignore */ }
+  if (!id) {
+    msg(`Finding ${TEST_COURSE.name}…`);
+    try {
+      let found = await searchCourses(TEST_COURSE.query);
+      if (!found.length) found = await searchCourses(TEST_COURSE.name);
+      const hits = found.sort((a, b) => turf.distance(a.center, TEST_COURSE.center) - turf.distance(b.center, TEST_COURSE.center));
+      if (!hits.length || turf.distance(hits[0].center, TEST_COURSE.center) > 15) return msg(`Couldn't find ${TEST_COURSE.name} in OpenStreetMap.`, { label: 'Try again', run: () => $('test-course').click() });
+      id = hits[0].id;
+      try { localStorage.setItem('testCourseId', id); } catch { /* ignore */ }
+    } catch (e) {
+      return msg((e as Error).message, { label: 'Try again', run: () => $('test-course').click() });
+    }
+  }
+  openCourse({ id, name: TEST_COURSE.name, center: TEST_COURSE.center });
+};
 $('refresh').onclick = () => { if (course) openCourse({ id: course.id, name: course.name, center: [0, 0] }, true); };
 
 $('dl-tiles').onclick = async () => {
@@ -796,11 +936,27 @@ function applyView() {
   map.setPaintProperty('cartpath', 'line-opacity', on ? 0.6 : 1);
   // In 3D the trees stand up; their flat shadows stay on the ground.
   map.setLayoutProperty('trees3d', 'visibility', is3d ? 'visible' : 'none');
+  const cut = state.cutout !== false;
+  for (const k of ['cutout', 'cutout-edge']) map.setLayoutProperty(k, 'visibility', cut ? 'visible' : 'none');
+  map.setLayoutProperty('holes', 'visibility', cut ? 'none' : 'visible');
+  $<HTMLInputElement>('cutout').checked = cut;
   for (const k of ['tree', 'treerow']) map.setLayoutProperty(k, 'visibility', !on && !is3d ? 'visible' : 'none');
   // The button shows the view you're in; tapping moves to the next.
   $('viewtoggle').textContent = state.view === '3d' ? '3D' : on ? 'Sat' : '2D';
   $<HTMLInputElement>('sat').checked = on;
 }
+$<HTMLInputElement>('cutout').onchange = (e) => {
+  state.cutout = (e.target as HTMLInputElement).checked;
+  store.saveState(state);
+  const h = hole();
+  if (h) updateCutout(h);
+  applyView();
+};
+$<HTMLSelectElement>('drive').onchange = (e) => {
+  state.drive = Number((e.target as HTMLSelectElement).value);
+  store.saveState(state);
+  render();
+};
 $<HTMLInputElement>('hazards').onchange = (e) => { state.hazards = (e.target as HTMLInputElement).checked; store.saveState(state); render(); };
 $<HTMLSelectElement>('pace-target').onchange = (e) => {
   state.paceTarget = Number((e.target as HTMLSelectElement).value);
