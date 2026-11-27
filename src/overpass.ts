@@ -5,23 +5,56 @@ import type { Course, LngLat, OverpassElement } from './types.ts';
 
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
 ];
+/** If an endpoint hasn't answered after this long, also ask the next one (first good answer wins). */
+const HEDGE_MS = 6000;
+const TOTAL_MS = 75000;
 
+/** The public Overpass servers are often slow, rate-limited or down, so ask them in a staggered race. */
 export async function overpass(query: string): Promise<OverpassElement[]> {
-  let lastErr: unknown;
-  for (const url of ENDPOINTS) {
-    try {
-      const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-      const text = await res.text();
-      if (!res.ok || !text.trimStart().startsWith('{')) throw new Error(`${url}: HTTP ${res.status}`);
-      return JSON.parse(text).elements as OverpassElement[];
-    } catch (e) {
-      lastErr = e;
-    }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TOTAL_MS);
+  // Start with whichever server answered last time.
+  let order = ENDPOINTS;
+  try {
+    const last = localStorage.getItem('overpass:last');
+    if (last && ENDPOINTS.includes(last)) order = [last, ...ENDPOINTS.filter((e) => e !== last)];
+  } catch { /* storage unavailable */ }
+
+  const ask = async (url: string) => {
+    const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal });
+    const text = await res.text();
+    if (!res.ok || !text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
+    const els = JSON.parse(text).elements as OverpassElement[];
+    try { localStorage.setItem('overpass:last', url); } catch { /* ignore */ }
+    return els;
+  };
+
+  try {
+    return await new Promise<OverpassElement[]>((resolve, reject) => {
+      let failed = 0;
+      let started = 0;
+      let hedge: ReturnType<typeof setTimeout> | undefined;
+      const next = () => {
+        if (started >= order.length) return;
+        const url = order[started++];
+        clearTimeout(hedge);
+        hedge = setTimeout(next, HEDGE_MS);
+        ask(url).then(resolve, () => {
+          if (++failed === order.length) reject(new Error('Couldn\'t reach OpenStreetMap (all Overpass servers busy). Try again in a minute.'));
+          else next(); // failed fast: move on right away
+        });
+      };
+      ctrl.signal.addEventListener('abort', () => reject(new Error('OpenStreetMap is taking too long. Try again in a minute.')));
+      next();
+    });
+  } finally {
+    clearTimeout(timer);
+    ctrl.abort(); // cancel the losers
   }
-  throw lastErr instanceof Error ? lastErr : new Error('Overpass unavailable');
 }
 
 export interface CourseHit {
