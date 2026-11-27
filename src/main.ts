@@ -16,7 +16,7 @@ import { hazardNumbers } from './hazards.ts';
 import { type Round, newRound, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
 import { initCard, renderCard } from './card.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
-import { applyEdits, closeRing, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
+import { applyEdits, closeRing, completeEdits, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
 import { BUILTIN, bundledEdits } from './courses/builtin.ts';
 
 /** Test course: Auburn Golf Course, Auburn WA. Its OSM id is looked up by name the first time (then remembered). */
@@ -992,7 +992,8 @@ async function exportEdits() {
   const e = editsFor(baseCourse.id);
   if (!e) return msg('Nothing to export yet: use Edit course map first.');
   const name = BUILTIN.find((b) => b.id === baseCourse!.id)?.name ?? baseCourse.name;
-  const file = new File([JSON.stringify({ ...e, name }, null, 1)], `${slug(name)}.json`, { type: 'application/json' });
+  const full = course ? completeEdits(course, e) : e; // include tees/greens that came from OSM
+  const file = new File([JSON.stringify({ ...full, name }, null, 1)], `${slug(name)}.json`, { type: 'application/json' });
   try {
     if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
   } catch (err) {

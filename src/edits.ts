@@ -109,6 +109,22 @@ export function applyEdits(base: Course, edits: CourseEdits | null): Course {
   return { ...base, holes, features: fc, bbox };
 }
 
+/**
+ * A self-contained course file: your edits plus, for every playable hole, the tee, doglegs, par and
+ * green it currently uses (some may come from OpenStreetMap), so the file doesn't depend on OSM.
+ */
+export function completeEdits(course: Course, edits: CourseEdits): CourseEdits {
+  const holes: Record<string, HoleEdit> = structuredClone(edits.holes);
+  for (const h of course.holes) {
+    const e = (holes[String(h.ref)] ??= {});
+    if (e.par == null && h.par != null) e.par = h.par;
+    if (!e.tee) e.tee = h.line[0];
+    if (!e.dogleg) e.dogleg = h.line.slice(1, -1);
+    if (!e.green && h.green) e.green = h.green;
+  }
+  return { ...edits, holes };
+}
+
 /** Checks a course file someone is importing; throws with a readable message if it isn't one. */
 export function parseEditsFile(text: string): CourseEdits {
   let j: any;

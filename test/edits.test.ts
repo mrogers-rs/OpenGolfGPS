@@ -96,3 +96,14 @@ test('marked trees and woods become scenery (and 3D), not hazards', async () => 
   assert.equal(scenery3d(c).features.length, 4); // trunk + 2 crown tiers + woods
   assert.deepEqual(parseEditsFile(JSON.stringify(e)), e);
 });
+
+test('export includes tees and par that come from OSM', async () => {
+  const { completeEdits } = await import('../src/edits.ts');
+  const e = emptyEdits(base.id, base.name);
+  e.holes['1'] = { green: closeRing(blob(base.holes[0].line.at(-1)!, 12)) };
+  const full = completeEdits(applyEdits(base, e), e);
+  assert.deepEqual(full.holes['1'].tee, base.holes[0].line[0]);
+  assert.equal(full.holes['1'].par, 4);
+  assert.equal(Object.keys(full.holes).length, 18);
+  assert.equal(e.holes['1'].tee, undefined); // original untouched
+});
