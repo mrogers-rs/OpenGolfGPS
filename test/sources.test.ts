@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toOverpass, wanted } from '../src/osmapi.ts';
+import { toOverpass, wanted, golfCoursesIn } from '../src/osmapi.ts';
 import { race } from '../src/overpass.ts';
 
 test('OSM API answers convert to Overpass geometry, keeping only course features', () => {
@@ -52,4 +52,21 @@ test('one plain message when every source fails', async () => {
     { name: 'a', run: async () => { throw new Error('HTTP 504'); } },
     { name: 'b', run: async () => { throw new Error('HTTP 429'); } },
   ], 30), /busy right now/);
+});
+
+test('golf courses are found in an OSM API answer by tag, with a center, for ways and relations', () => {
+  const els: any[] = [
+    { type: 'node', id: 1, lat: 47.33, lon: -122.21 },
+    { type: 'node', id: 2, lat: 47.34, lon: -122.21 },
+    { type: 'node', id: 3, lat: 47.34, lon: -122.20 },
+    { type: 'way', id: 10, nodes: [1, 2, 3, 1], tags: { leisure: 'golf_course', name: 'Auburn Golf Course' } },
+    { type: 'way', id: 11, nodes: [1, 2, 3], tags: { golf: 'hole', ref: '1' } },
+    { type: 'way', id: 12, nodes: [2, 3, 2] },
+    { type: 'relation', id: 20, members: [{ type: 'way', ref: 12, role: 'outer' }], tags: { leisure: 'golf_course' } },
+  ];
+  const got = golfCoursesIn(els);
+  assert.deepEqual(got.map((c) => c.id), ['way/10', 'relation/20']);
+  assert.equal(got[0].name, 'Auburn Golf Course');
+  assert.ok(Math.abs(got[0].center[1] - 47.335) < 1e-9);
+  assert.equal(got[1].name, 'Golf course');
 });

@@ -123,3 +123,31 @@ export async function apiMap(s: number, w: number, n: number, e: number, signal?
 export async function apiCourseFeatures(s: number, w: number, n: number, e: number, signal?: AbortSignal, onBytes?: (n: number) => void): Promise<OverpassElement[]> {
   return toOverpass(await apiMap(s, w, n, e, signal, onBytes));
 }
+
+/** Golf courses (ways and relations tagged leisure=golf_course) in an OSM API answer, with a rough center. */
+export function golfCoursesIn(els: ApiEl[]): { id: string; name: string; center: [number, number] }[] {
+  const nodes = new Map<number, ApiNode>();
+  const ways = new Map<number, ApiWay>();
+  for (const e of els) {
+    if (e.type === 'node') nodes.set(e.id, e);
+    else if (e.type === 'way') ways.set(e.id, e);
+  }
+  const mean = (ids: number[]): [number, number] | null => {
+    const pts = ids.map((id) => nodes.get(id)).filter((n): n is ApiNode => !!n);
+    if (!pts.length) return null;
+    return [pts.reduce((s, n) => s + n.lon, 0) / pts.length, pts.reduce((s, n) => s + n.lat, 0) / pts.length];
+  };
+  const out: { id: string; name: string; center: [number, number] }[] = [];
+  for (const e of els) {
+    if (e.type === 'node' || e.tags?.leisure !== 'golf_course') continue;
+    const ids = e.type === 'way' ? e.nodes : e.members.flatMap((m) => (m.type === 'way' ? ways.get(m.ref)?.nodes ?? [] : []));
+    const c = mean(ids);
+    if (c) out.push({ id: `${e.type}/${e.id}`, name: e.tags.name ?? 'Golf course', center: c });
+  }
+  return out;
+}
+
+/** Golf courses whose outline crosses a small box around a point (lon, lat), from the main API. */
+export async function apiCoursesAt(lon: number, lat: number, signal?: AbortSignal, halfDeg = 0.003) {
+  return golfCoursesIn(await apiMap(lat - halfDeg, lon - halfDeg, lat + halfDeg, lon + halfDeg, signal));
+}

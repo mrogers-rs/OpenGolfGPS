@@ -8,7 +8,7 @@ import { COURSE_DATA_VERSION } from './course.ts';
 import { scenery3d } from './scenery3d.ts';
 import { distanceArcs, driveTarget, DEFAULT_DRIVE_YD } from './arcs.ts';
 import { holeCorridor, holeMask, insideCorridor, framing, APPROACH_YD } from './cutout.ts';
-import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
+import { loadCourse, searchCourses, coursesNear, courseAt, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
@@ -18,7 +18,8 @@ import { initCard, renderCard } from './card.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 
 /** Test course: Auburn Golf Course, Auburn WA. Its OSM id is looked up by name the first time (then remembered). */
-const TEST_COURSE = { name: 'Auburn Golf Course', query: 'Auburn Golf Course Auburn Washington', center: [-122.2105, 47.3325] as LngLat };
+/** Built-in test course, found by position (29630 Green River Rd SE, Auburn WA). The key holds its OSM id once found. */
+const TEST_COURSE = { name: 'Auburn Golf Course', center: [-122.2083, 47.3362] as LngLat, key: 'testCourse:auburn' };
 /** A hole picked more than this long ago is treated as a new round on reopen. */
 const ROUND_RESET_MS = 6 * 3600 * 1000;
 
@@ -130,7 +131,7 @@ function markerPool(cls: string) {
     pool.forEach((m, i) => {
       const it = items[i];
       if (!it) return void m.remove();
-      const e = m.getElement();
+      const e = label(m);
       if (e.innerHTML !== it.html) e.innerHTML = it.html;
       e.classList.toggle('bunker', it.extra === 'bunker');
       e.classList.toggle('water', it.extra === 'water');
@@ -149,15 +150,27 @@ function crosshair() {
   const d = document.createElement('div');
   d.className = 'crosshair';
   d.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="13" fill="rgba(0,0,0,.35)" stroke="#fff" stroke-width="3.5"/><path d="M24 2v12M24 34v12M2 24h12M34 24h12" stroke="#000" stroke-width="6" stroke-linecap="round"/><path d="M24 3v11M24 34v11M3 24h11M34 24h11" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="24" cy="24" r="5" fill="#ff2d2d" stroke="#fff" stroke-width="2"/></svg>';
-  return d;
+  return wrap(d);
 }
 
+/**
+ * A marker element: a plain wrapper (MapLibre moves it) around the styled label. The label is
+ * squeezed back to normal width when the map is stretched sideways in portrait (see style.css).
+ */
 function el(cls: string, text = '') {
   const d = document.createElement('div');
   d.className = cls;
   d.textContent = text;
-  return d;
+  return wrap(d);
 }
+function wrap(inner: HTMLElement) {
+  const w = document.createElement('div');
+  w.className = 'mk';
+  w.append(inner);
+  return w;
+}
+/** The styled label inside a marker. */
+const label = (m: maplibregl.Marker) => m.getElement().firstElementChild as HTMLElement;
 
 targetMarker.on('drag', () => {
   const p = targetMarker.getLngLat();
@@ -280,12 +293,11 @@ function wide() {
 }
 
 /**
- * Map bearing that puts `from -> to` pointing up the screen (portrait), or from the bottom-left corner
- * toward the top-right corner of the open map area (landscape).
+ * Map bearing that runs `from -> to` from the bottom-left corner toward the top-right corner of the
+ * open map area (portrait and landscape), which gives the hole the most length.
  */
 function playBearing(from: LngLat, to: LngLat) {
   const b = turf.bearing(from, to);
-  if (!wide()) return b;
   const { clientWidth: w, clientHeight: h } = map.getContainer();
   const pad = fitPadding();
   const up = (Math.atan2(h - pad.top - pad.bottom, w - pad.left - pad.right) * 180) / Math.PI; // diagonal, degrees above horizontal
@@ -307,9 +319,21 @@ function fitPadding() {
   // In landscape the yardage card floats at the top of the map: keep the hole below it.
   const nums = document.getElementById('nums')?.getBoundingClientRect();
   const numsBottom = nums && nums.height && nums.top < box.top + box.height / 2 ? nums.bottom - box.top : 0;
-  return wide()
+  const pad = wide()
     ? { top: Math.max(96, cardBottom * 0.75, numsBottom + 16), bottom: 72, left: 56, right: toolsW + 24 }
-    : { top: Math.max(30, cardBottom + 28), bottom: Math.max(70, cardLift + 16), left: 40, right: toolsW + 10 };
+    : { top: Math.max(30, cardBottom + 28), bottom: Math.max(70, cardLift + 16), left: 32, right: toolsW + 8 };
+  return unstretch(pad);
+}
+
+/** How much the map is stretched sideways on screen (portrait), 1 when it isn't. */
+function stretchX() {
+  const c = map.getContainer();
+  return c.offsetWidth ? c.getBoundingClientRect().width / c.offsetWidth : 1;
+}
+/** Screen-pixel padding to map pixels (side padding shrinks by the stretch). */
+function unstretch(p: { top: number; bottom: number; left: number; right: number }) {
+  const sx = stretchX();
+  return { ...p, left: p.left / sx, right: p.right / sx };
 }
 
 /**
@@ -385,7 +409,7 @@ function fitGreen(h: Hole) {
   const from = usablePlayer(h) ?? h.line[Math.max(0, h.line.length - 2)];
   const bearing = playBearing(from, h.center);
   const pts = turf.coordAll(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as LngLat[];
-  fitPoints(pts, bearing, 0, wide() ? { top: 90, bottom: 60, left: 60, right: 100 } : { top: 130, bottom: 60, left: 50, right: 86 }, 21);
+  fitPoints(pts, bearing, 0, wide() ? { top: 90, bottom: 60, left: 60, right: 100 } : unstretch({ ...fitPadding(), left: 40, right: 86 }), 21);
 }
 
 // ---------- Flyover ----------
@@ -494,7 +518,7 @@ function renderPinLine(h: Hole, me: LngLat | null, pin: LngLat | null | undefine
   const d = yd(me!, to);
   // Just short of the pin, so it sits on the green close-up.
   const back = Math.min(d * 0.9144 * 0.45, 22);
-  pinLabel.getElement().textContent = fmt(d);
+  label(pinLabel).textContent = fmt(d);
   pinLabel.setLngLat(turf.destination(to, back, turf.bearing(to, me!), { units: 'meters' }).geometry.coordinates as LngLat).addTo(map);
 }
 
@@ -820,18 +844,20 @@ $('near').onclick = () => {
 };
 $('test-course').onclick = async () => {
   let id = '';
-  try { id = localStorage.getItem('testCourseId') ?? ''; } catch { /* ignore */ }
+  try { id = localStorage.getItem(TEST_COURSE.key) ?? ''; } catch { /* ignore */ }
   if (!id) {
     msg(`Finding ${TEST_COURSE.name}…`);
+    setButtonsBusy(true);
     try {
-      let found = await searchCourses(TEST_COURSE.query);
-      if (!found.length) found = await searchCourses(TEST_COURSE.name);
-      const hits = found.sort((a, b) => turf.distance(a.center, TEST_COURSE.center) - turf.distance(b.center, TEST_COURSE.center));
-      if (!hits.length || turf.distance(hits[0].center, TEST_COURSE.center) > 15) return msg(`Couldn't find ${TEST_COURSE.name} in OpenStreetMap.`, { label: 'Try again', run: () => $('test-course').click() });
-      id = hits[0].id;
-      try { localStorage.setItem('testCourseId', id); } catch { /* ignore */ }
+      // By position, not by name: the name search was unreliable.
+      const hit = await courseAt(TEST_COURSE.center, /auburn/i);
+      if (!hit) throw new Error('Course not found in OpenStreetMap');
+      id = hit.id;
+      try { localStorage.setItem(TEST_COURSE.key, id); } catch { /* ignore */ }
     } catch (e) {
-      return msg((e as Error).message, { label: 'Try again', run: () => $('test-course').click() });
+      return msg(`Couldn't find ${TEST_COURSE.name}. ${(e as Error).message}`, { label: 'Try again', run: () => $('test-course').click() });
+    } finally {
+      setButtonsBusy(false);
     }
   }
   openCourse({ id, name: TEST_COURSE.name, center: TEST_COURSE.center });
@@ -969,4 +995,4 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 }
 
 // For tests / debugging in the console.
-(window as any).golf = { map, goHole, get course() { return course; }, get state() { return state; }, get round() { return round; }, onPosition, setCourse };
+(window as any).golf = { map, goHole, get course() { return course; }, get state() { return state; }, get round() { return round; }, get target() { return target; }, onPosition, setCourse };
