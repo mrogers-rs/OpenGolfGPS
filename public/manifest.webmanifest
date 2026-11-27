@@ -1,6 +1,6 @@
 {
-  "name": "Golf GPS",
-  "short_name": "Golf GPS",
+  "name": "OpenGolfGPS",
+  "short_name": "OpenGolfGPS",
   "start_url": "/",
   "display": "standalone",
   "orientation": "any",

@@ -154,3 +154,17 @@ select { font: inherit; padding: 8px; border-radius: 10px; background: #000; col
   #holeno { font-size: 30px; line-height: 1; }
   #holemeta { font-size: 12px; }
 }
+
+/* ---------- Brand header ---------- */
+#app { grid-template-rows: auto auto 1fr auto; grid-template-areas: 'brand' 'bar' 'map' 'nums'; }
+#brand { grid-area: brand; display: flex; align-items: center; gap: 10px; padding: calc(var(--safe-t) + 4px) 10px 4px; background: #000; border-bottom: 1px solid #1c1c1c; min-width: 0; }
+#bar { padding-top: 6px; }
+.mark { display: flex; align-items: center; gap: 6px; flex: none; }
+.logo { width: 26px; height: 26px; }
+.word { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+.word b { color: #5fd16a; font-weight: 800; }
+#coursename { flex: 1; min-width: 0; min-height: 34px; padding: 4px 10px; border: none; background: none; text-align: right; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#coursename::after { content: ' ▾'; color: #666; }
+@media (orientation: landscape) and (min-width: 700px) {
+  #app { grid-template-rows: auto auto 1fr; grid-template-areas: 'brand brand' 'bar bar' 'map nums'; }
+}
