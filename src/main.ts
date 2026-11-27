@@ -564,7 +564,18 @@ $('holeinfo').onclick = () => {
 
 // ---------- Course sheet ----------
 const sheet = $<HTMLDialogElement>('sheet');
-const msg = (t: string) => ($('msg').textContent = t);
+/** Message line in the Courses sheet, optionally with a button (e.g. Try again). */
+function msg(t: string, action?: { label: string; run: () => void }) {
+  const el = $('msg');
+  el.textContent = t;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'retry';
+    b.textContent = action.label;
+    b.onclick = action.run;
+    el.append(' ', b);
+  }
+}
 $('menu').onclick = openSheet;
 $('coursename').onclick = openSheet;
 
@@ -628,7 +639,7 @@ async function openCourse(h: CourseHit, force = false) {
     await new Promise((r) => setTimeout(r, 500)); // let the full bar show for a moment
     sheet.close();
   } catch (e) {
-    msg(`Couldn't load: ${(e as Error).message}`);
+    msg(`Couldn't load ${h.name}. ${(e as Error).message}`, { label: 'Try again', run: () => openCourse(h, force) });
   } finally {
     progress(null);
     setButtonsBusy(false);
@@ -679,7 +690,7 @@ $('near').onclick = () => {
       renderResults(hits);
       msg(hits.length ? '' : 'No courses within 25 km.');
     } catch (e) {
-      msg((e as Error).message);
+      msg((e as Error).message, { label: 'Try again', run: () => $('near').click() });
     }
   };
   if (player) return go(player);

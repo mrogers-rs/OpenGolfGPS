@@ -2,6 +2,7 @@
 import * as turf from '@turf/turf';
 import { parseCourse } from './course.ts';
 import type { Course, LngLat, OverpassElement } from './types.ts';
+import { apiCourseHead, apiCourseFeatures } from './osmapi.ts';
 
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -12,11 +13,17 @@ const ENDPOINTS = [
 /** If an endpoint hasn't answered after this long, also ask the next one (first good answer wins). */
 const HEDGE_MS = 8000;
 const TOTAL_MS = 90000;
+/** If the preferred source (Overpass or the main OSM API) hasn't answered by then, also ask the other. */
+const HEDGE_SOURCE_MS = 12000;
 
 /** The public Overpass servers are often slow, rate-limited or down, so ask them in a staggered race. */
 /** `onBytes` hears how much of the answer has arrived so far (the fastest server's). */
-export async function overpass(query: string, onBytes?: (n: number) => void): Promise<OverpassElement[]> {
+export async function overpass(query: string, onBytes?: (n: number) => void, signal?: AbortSignal): Promise<OverpassElement[]> {
   const ctrl = new AbortController();
+  if (signal) {
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
   const timer = setTimeout(() => ctrl.abort(), TOTAL_MS);
   // Start with whichever server answered last time.
   let order = ENDPOINTS;
@@ -59,7 +66,7 @@ export async function overpass(query: string, onBytes?: (n: number) => void): Pr
           hedge = setTimeout(next, 3000);
         });
       };
-      ctrl.signal.addEventListener('abort', () => reject(new Error('OpenStreetMap is taking too long. Try again in a minute.')));
+      ctrl.signal.addEventListener('abort', () => reject(new Error(signal?.aborted ? 'cancelled' : 'OpenStreetMap is taking too long. Try again in a minute.')));
       next();
     });
   } finally {
@@ -110,6 +117,62 @@ export function stepProgress(onProgress: LoadProgress | undefined, step: LoadSte
 
 export const nextFrame = () => new Promise<void>((r) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => setTimeout(r, 0)) : setTimeout(r, 0)));
 
+type Source<T> = { name: string; run: (signal: AbortSignal) => Promise<T> };
+
+/**
+ * Asks the preferred source first and the other one after `hedgeMs` (or right away if the first fails).
+ * The first good answer wins and the other request is cancelled. The source that won is tried first next time.
+ */
+export async function race<T>(key: string, sources: Source<T>[], hedgeMs: number): Promise<T> {
+  let order = sources;
+  try {
+    const last = localStorage.getItem('source:' + key);
+    const i = sources.findIndex((s) => s.name === last);
+    if (i > 0) order = [sources[i], ...sources.filter((_, j) => j !== i)];
+  } catch { /* storage unavailable */ }
+  const ctrls = order.map(() => new AbortController());
+  return new Promise<T>((resolve, reject) => {
+    const errors: string[] = [];
+    let started = 0;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const start = () => {
+      clearTimeout(timer);
+      if (settled || started >= order.length) return;
+      const i = started++;
+      const src = order[i];
+      timer = setTimeout(start, hedgeMs);
+      src.run(ctrls[i].signal).then(
+        (v) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ctrls.forEach((c, j) => j !== i && c.abort());
+          try { localStorage.setItem('source:' + key, src.name); } catch { /* ignore */ }
+          resolve(v);
+        },
+        (e: Error) => {
+          if (settled) return;
+          errors.push(e.message);
+          if (errors.length >= order.length) {
+            settled = true;
+            clearTimeout(timer);
+            reject(new Error(friendly(errors)));
+          } else if (started === errors.length) start(); // nothing else running: try the next one now
+        },
+      );
+    };
+    start();
+  });
+}
+
+/** One plain-language message for a set of failures. */
+function friendly(errors: string[]): string {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return "You're offline. Courses you've opened before still work; new ones need a connection.";
+  if (errors.some((e) => /not found|No holes/i.test(e))) return errors.find((e) => /not found|No holes/i.test(e))!;
+  return 'OpenStreetMap is busy right now. Wait a minute and try again.';
+}
+
 export interface CourseHit {
   id: string; // "way/123"
   name: string;
@@ -119,10 +182,31 @@ export interface CourseHit {
 
 /** Golf courses within `km` of a point. */
 export async function coursesNear(p: LngLat, km = 25): Promise<CourseHit[]> {
-  const els = await overpass(`[out:json][timeout:30];nwr["leisure"="golf_course"](around:${km * 1000},${p[1]},${p[0]});out tags center;`);
+  return race('near', [
+    { name: 'overpass', run: (sig) => coursesNearOverpass(p, km, sig) },
+    { name: 'nominatim', run: (sig) => coursesNearNominatim(p, km, sig) },
+  ], 10000);
+}
+
+async function coursesNearOverpass(p: LngLat, km: number, signal: AbortSignal): Promise<CourseHit[]> {
+  const els = await overpass(`[out:json][timeout:30];nwr["leisure"="golf_course"](around:${km * 1000},${p[1]},${p[0]});out tags center;`, undefined, signal);
   return els
     .filter((e) => e.type !== 'node' && e.tags?.name)
     .map((e: any) => ({ id: `${e.type}/${e.id}`, name: e.tags.name, center: [e.center.lon, e.center.lat] as LngLat }))
+    .sort((a, b) => turf.distance(p, a.center) - turf.distance(p, b.center));
+}
+
+/** Golf courses in a box around a point, from Nominatim (fallback when Overpass is busy). */
+async function coursesNearNominatim(p: LngLat, km: number, signal: AbortSignal): Promise<CourseHit[]> {
+  const dLat = km / 111, dLon = km / (111 * Math.cos((p[1] * Math.PI) / 180));
+  const box = [p[0] - dLon, p[1] + dLat, p[0] + dLon, p[1] - dLat].map((v) => v.toFixed(4)).join(',');
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=40&q=golf+course&viewbox=${box}&bounded=1`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+  if (!res.ok) throw new Error(`Nominatim: HTTP ${res.status}`);
+  const rows: any[] = await res.json();
+  return rows
+    .filter((r) => r.type === 'golf_course' && (r.osm_type === 'way' || r.osm_type === 'relation') && r.name)
+    .map((r) => ({ id: `${r.osm_type}/${r.osm_id}`, name: r.name, center: [+r.lon, +r.lat] as LngLat }))
     .sort((a, b) => turf.distance(p, a.center) - turf.distance(p, b.center));
 }
 
@@ -141,8 +225,10 @@ export async function searchCourses(q: string): Promise<CourseHit[]> {
 export async function loadCourse(id: string, fallbackName?: string, onProgress?: LoadProgress): Promise<Course> {
   const [type, osmId] = id.split('/');
   stepProgress(onProgress, 'find');
-  const head = await overpass(`[out:json][timeout:30];${type}(${osmId});out geom tags bb;`);
-  const c = head[0];
+  const c = await race('course', [
+    { name: 'overpass', run: async (sig) => (await overpass(`[out:json][timeout:30];${type}(${osmId});out geom tags bb;`, undefined, sig))[0] },
+    { name: 'osm-api', run: (sig) => apiCourseHead(type, osmId, sig) },
+  ], HEDGE_SOURCE_MS);
   if (!c) throw new Error('Course not found in OpenStreetMap');
   const boundary = boundaryOf(c);
   const b = c.bounds!;
@@ -151,7 +237,8 @@ export async function loadCourse(id: string, fallbackName?: string, onProgress?:
   stepProgress(onProgress, 'download');
   const mb = (n: number) => ` (${(n / 1e6).toFixed(1)} MB)`;
   // Golf features plus the scenery around them (trees, woods, buildings, paths, streams) for the map view.
-  const els = await overpass(`[out:json][timeout:90];(
+  const onBytes = (n: number) => stepProgress(onProgress, 'download', downloadFrac(n), mb(n));
+  const query = `[out:json][timeout:90];(
     nwr["golf"](${bbox});
     nwr["natural"~"^(water|wood|scrub|heath|wetland|tree_row)$"](${bbox});
     node["natural"="tree"](${bbox});
@@ -159,7 +246,12 @@ export async function loadCourse(id: string, fallbackName?: string, onProgress?:
     way["building"](${bbox});
     way["highway"](${bbox});
     way["waterway"~"^(stream|river|ditch|drain|canal)$"](${bbox});
-  );out geom;`, (n) => stepProgress(onProgress, 'download', downloadFrac(n), mb(n)));
+  );out geom;`;
+  const [s, w, n, e] = [b.minlat - pad, b.minlon - pad, b.maxlat + pad, b.maxlon + pad];
+  const els = await race('course', [
+    { name: 'overpass', run: (sig) => overpass(query, onBytes, sig) },
+    { name: 'osm-api', run: (sig) => apiCourseFeatures(s, w, n, e, sig, onBytes) },
+  ], HEDGE_SOURCE_MS);
   stepProgress(onProgress, 'build');
   await nextFrame(); // let the bar paint before the parse blocks the page
   const course = parseCourse(els, { id, name: c.tags?.name ?? fallbackName ?? 'Golf course', boundary });

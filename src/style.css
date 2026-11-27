@@ -240,3 +240,4 @@ select { font: inherit; padding: 8px; border-radius: 10px; background: #000; col
 button.danger { border-color: #8a2b2b; color: #ff8a8a; width: 100%; }
 button.danger:active { background: #3a1515; }
 button:disabled { opacity: .45; }
+.msg .retry { min-height: 40px; padding: 6px 14px; margin-left: 6px; color: var(--fg); border-color: var(--accent); }
