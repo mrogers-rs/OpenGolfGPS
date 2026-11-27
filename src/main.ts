@@ -231,33 +231,64 @@ function showHole(fit: boolean) {
 }
 
 /** Tee at the bottom, green at the top. Includes you if you're on this hole. */
+/** True when the map is wider than tall: holes then run left to right instead of bottom to top. */
+function wide() {
+  const { clientWidth: w, clientHeight: h } = map.getContainer();
+  return w > h * 1.05;
+}
+
+/** Map bearing that puts `from -> to` pointing up the screen (portrait) or to the right (landscape). */
+function playBearing(from: LngLat, to: LngLat) {
+  const b = turf.bearing(from, to);
+  return wide() ? b - 90 : b;
+}
+
+/** Room the overlays (hole card, tool buttons, shot bar) leave for the hole. */
+function fitPadding() {
+  return wide() ? { top: 118, bottom: 56, left: 24, right: 76 } : { top: 124, bottom: 52, left: 24, right: 72 };
+}
+
+/** Hole view: tee to green filling the screen, running up (portrait) or across (landscape). */
+const TILT = 50;
+const TILT_WIDE = 32;
 function fitHole(h: Hole) {
   const pts: LngLat[] = [...h.line, ...(h.green ?? [])];
   if (player && turf.distance(player, h.center, { units: 'meters' }) < 640) pts.push(player);
-  const bearing = turf.bearing(h.line[0], h.center);
-  const cam = map.cameraForBounds(turf.bbox(turf.multiPoint(pts)) as [number, number, number, number], { bearing, padding: { top: 110, bottom: 30, left: 50, right: 50 }, maxZoom: 19 });
-  if (!cam) return;
-  map.jumpTo({ ...cam, bearing, pitch: 0 });
-  if (state.view === '3d' && !greenView) tiltToFit(pts);
+  const bearing = playBearing(h.line[0], h.center);
+  const pitch = state.view === '3d' && !greenView ? (wide() ? TILT_WIDE : TILT) : 0;
+  fitPoints(pts, bearing, pitch, fitPadding(), 19);
 }
 
-/** Tilt the camera (as if standing behind the tee) and zoom/pan until every point is on screen. */
-const TILT = 50;
-function tiltToFit(pts: LngLat[]) {
-  map.jumpTo({ pitch: TILT });
-  const pad = { top: 110, bottom: 70, left: 40, right: 80 };
+/**
+ * Rotates to `bearing`, tilts to `pitch`, then zooms and pans until the points just fill the padded screen.
+ * (cameraForBounds fits the north-up box around the points, which leaves a rotated hole small.)
+ */
+function fitPoints(pts: LngLat[], bearing: number, pitch: number, pad: { top: number; bottom: number; left: number; right: number }, maxZoom: number) {
   const { clientWidth: w, clientHeight: hgt } = map.getContainer();
-  for (let i = 0; i < 25; i++) {
+  const availW = Math.max(40, w - pad.left - pad.right);
+  const availH = Math.max(40, hgt - pad.top - pad.bottom);
+  const c = turf.center(turf.multiPoint(pts)).geometry.coordinates as LngLat;
+  map.jumpTo({ center: c, bearing, pitch, zoom: Math.min(map.getZoom() || 16, maxZoom) });
+  for (let i = 0; i < 12; i++) {
     const xy = pts.map((p) => map.project(p));
     const minX = Math.min(...xy.map((q) => q.x)), maxX = Math.max(...xy.map((q) => q.x));
     const minY = Math.min(...xy.map((q) => q.y)), maxY = Math.max(...xy.map((q) => q.y));
-    // Center the points in the padded area.
-    const dx = (minX + maxX) / 2 - (pad.left + (w - pad.right)) / 2;
-    const dy = (minY + maxY) / 2 - (pad.top + (hgt - pad.bottom)) / 2;
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) map.jumpTo({ center: map.unproject([w / 2 + dx, hgt / 2 + dy]) });
-    const fits = maxX - minX <= w - pad.left - pad.right && maxY - minY <= hgt - pad.top - pad.bottom;
-    if (fits && Math.abs(dx) <= 1 && Math.abs(dy) <= 1) break;
-    if (!fits) map.jumpTo({ zoom: map.getZoom() - 0.12 });
+    const ratio = Math.min(availW / Math.max(1, maxX - minX), availH / Math.max(1, maxY - minY));
+    const dx = (minX + maxX) / 2 - (pad.left + availW / 2);
+    const dy = (minY + maxY) / 2 - (pad.top + availH / 2);
+    // Ease in when tilted: the far end shrinks as you zoom, so a full step overshoots.
+    const step = Math.log2(ratio) * (pitch ? 0.8 : 1);
+    const zoom = Math.min(maxZoom, map.getZoom() + step);
+    const center = map.unproject([w / 2 + dx, hgt / 2 + dy]);
+    map.jumpTo({ center, zoom });
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && (Math.abs(step) < 0.01 || (zoom >= maxZoom && ratio >= 1))) break;
+  }
+  // Never leave anything cut off: back out a little at a time if the last step overshot.
+  for (let i = 0; i < 10; i++) {
+    const xy = pts.map((p) => map.project(p));
+    const off = xy.some((q) => q.x < pad.left - 1 || q.x > w - pad.right + 1 || q.y < pad.top - 1 || q.y > hgt - pad.bottom + 1);
+    if (!off) break;
+    map.jumpTo({ zoom: map.getZoom() - 0.05 });
   }
 }
 
@@ -265,10 +296,9 @@ function tiltToFit(pts: LngLat[]) {
 function fitGreen(h: Hole) {
   const ring = h.green ?? [h.center];
   const from = usablePlayer(h) ?? h.line[Math.max(0, h.line.length - 2)];
-  const bearing = turf.bearing(from, h.center);
-  const box = turf.bbox(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as [number, number, number, number];
-  const cam = map.cameraForBounds(box, { bearing, padding: { top: 70, bottom: 40, left: 40, right: 70 }, maxZoom: 21 });
-  if (cam) map.jumpTo({ ...cam, bearing, pitch: 0 });
+  const bearing = playBearing(from, h.center);
+  const pts = turf.coordAll(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as LngLat[];
+  fitPoints(pts, bearing, 0, wide() ? { top: 70, bottom: 40, left: 40, right: 80 } : { top: 70, bottom: 40, left: 40, right: 70 }, 21);
 }
 
 // ---------- Flyover ----------
@@ -503,7 +533,7 @@ document.addEventListener('visibilitychange', () => (document.visibilityState ==
 let resizeTimer = 0;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = window.setTimeout(() => { const h = hole(); if (h) fitHole(h); }, 250);
+  resizeTimer = window.setTimeout(() => { const h = hole(); if (h && !flying) greenView ? fitGreen(h) : fitHole(h); }, 250);
 });
 
 // ---------- Controls ----------
@@ -814,4 +844,4 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 }
 
 // For tests / debugging in the console.
-(window as any).golf = { map, get course() { return course; }, get state() { return state; }, get round() { return round; }, onPosition, setCourse };
+(window as any).golf = { map, goHole, get course() { return course; }, get state() { return state; }, get round() { return round; }, onPosition, setCourse };
