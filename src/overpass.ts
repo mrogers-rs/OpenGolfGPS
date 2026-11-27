@@ -10,8 +10,8 @@ const ENDPOINTS = [
   'https://overpass.kumi.systems/api/interpreter',
 ];
 /** If an endpoint hasn't answered after this long, also ask the next one (first good answer wins). */
-const HEDGE_MS = 6000;
-const TOTAL_MS = 75000;
+const HEDGE_MS = 8000;
+const TOTAL_MS = 90000;
 
 /** The public Overpass servers are often slow, rate-limited or down, so ask them in a staggered race. */
 export async function overpass(query: string): Promise<OverpassElement[]> {
@@ -25,7 +25,9 @@ export async function overpass(query: string): Promise<OverpassElement[]> {
   } catch { /* storage unavailable */ }
 
   const ask = async (url: string) => {
-    const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal });
+    const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal,
+      // overpass-api.de refuses some hosting origins by Referer (e.g. *.pages.dev); it doesn't need one.
+      referrerPolicy: 'no-referrer' });
     const text = await res.text();
     if (!res.ok || !text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
     const els = JSON.parse(text).elements as OverpassElement[];
@@ -37,15 +39,23 @@ export async function overpass(query: string): Promise<OverpassElement[]> {
     return await new Promise<OverpassElement[]>((resolve, reject) => {
       let failed = 0;
       let started = 0;
+      let round = 1;
       let hedge: ReturnType<typeof setTimeout> | undefined;
       const next = () => {
         if (started >= order.length) return;
         const url = order[started++];
         clearTimeout(hedge);
         hedge = setTimeout(next, HEDGE_MS);
+        const myRound = round;
         ask(url).then(resolve, () => {
-          if (++failed === order.length) reject(new Error('Couldn\'t reach OpenStreetMap (all Overpass servers busy). Try again in a minute.'));
-          else next(); // failed fast: move on right away
+          if (myRound !== round) return; // a slow failure from an earlier round
+          if (++failed < order.length) return next(); // failed fast: move on right away
+          if (round++ >= 3) return reject(new Error("Couldn't reach OpenStreetMap (all Overpass servers busy). Try again in a minute."));
+          // Every server failed: they're usually just busy, so go round again after a pause.
+          failed = 0;
+          started = 0;
+          clearTimeout(hedge);
+          hedge = setTimeout(next, 3000);
         });
       };
       ctrl.signal.addEventListener('abort', () => reject(new Error('OpenStreetMap is taking too long. Try again in a minute.')));
