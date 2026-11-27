@@ -96,7 +96,9 @@ const map = new maplibregl.Map({
       { id: 'shot-line', type: 'line', source: 'shots', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ff7a1a', 'line-width': 2.5 } },
       { id: 'shot-pt', type: 'circle', source: 'shots', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#ff7a1a', 'circle-stroke-color': '#000', 'circle-stroke-width': 1.5 } },
       { id: 'pinline', type: 'line', source: 'pinline', layout: { 'line-cap': 'round' }, paint: { 'line-color': '#fff', 'line-width': 2.5, 'line-opacity': 0.95 } },
-      { id: 'measure-line', type: 'line', source: 'measure', paint: { 'line-color': '#ffd400', 'line-width': 3 } },
+      // Tap-to-measure: thick legs (you -> target in yellow, target -> pin in white) on a dark casing.
+      { id: 'measure-casing', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.55 } },
+      { id: 'measure-line', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['match', ['get', 'leg'], 'to', '#ffd400', '#ffffff'], 'line-width': 5 } },
     ],
   },
   center: TEST_COURSE.center,
@@ -116,7 +118,7 @@ function line(id: string, kind: string, color: string, width: any, dash?: number
 }
 
 const playerMarker = new maplibregl.Marker({ element: el('dot-player') });
-const targetMarker = new maplibregl.Marker({ element: el('dot-target'), draggable: true });
+const targetMarker = new maplibregl.Marker({ element: crosshair(), draggable: true });
 const flagMarker = new maplibregl.Marker({ element: el('flag', '⛳'), anchor: 'bottom-left', offset: [-4, 0] });
 const frontMarker = new maplibregl.Marker({ element: el('edge') });
 const backMarker = new maplibregl.Marker({ element: el('edge') });
@@ -134,6 +136,7 @@ function markerPool(cls: string) {
       if (e.innerHTML !== it.html) e.innerHTML = it.html;
       e.classList.toggle('bunker', it.extra === 'bunker');
       e.classList.toggle('water', it.extra === 'water');
+      e.classList.toggle('rest', it.extra === 'rest');
       m.setOffset(it.offset ?? [0, 0]).setLngLat(it.at).addTo(map);
     });
   };
@@ -141,6 +144,15 @@ function markerPool(cls: string) {
 const hazardLabels = markerPool('hz');
 const layupLabels = markerPool('lay');
 const arcLabels = markerPool('arclbl');
+const legLabels = markerPool('leglbl');
+
+/** The tap-to-measure target: a crosshair with a red bull's-eye (drag it to move). */
+function crosshair() {
+  const d = document.createElement('div');
+  d.className = 'crosshair';
+  d.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="13" fill="rgba(0,0,0,.35)" stroke="#fff" stroke-width="3.5"/><path d="M24 2v12M24 34v12M2 24h12M34 24h12" stroke="#000" stroke-width="6" stroke-linecap="round"/><path d="M24 3v11M24 34v11M3 24h11M34 24h11" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="24" cy="24" r="5" fill="#ff2d2d" stroke="#fff" stroke-width="2"/></svg>';
+  return d;
+}
 
 function el(cls: string, text = '') {
   const d = document.createElement('div');
@@ -412,22 +424,31 @@ function render() {
   }
 
   renderPinLine(h, me, pin);
-  renderArcs(h, me);
   renderHazards(h, me);
+  renderArcs(h, me);
   renderGreenInfo(h, n.frontPt, n.backPt);
   renderShots(h);
   renderPace();
 
   if (target) {
     const m = measure(h, player, target);
+    const to = pin ?? h.center;
+    const rest = yd(target, to);
     $('measure').hidden = false;
-    $('m-to').textContent = fmt(m.toTarget);
-    $('m-then').textContent = fmt(m.targetToCenter);
     targetMarker.setLngLat(target).addTo(map);
-    (map.getSource('measure') as GeoJSONSource).setData(turf.lineString([m.from, target, h.center]));
+    (map.getSource('measure') as GeoJSONSource).setData(turf.featureCollection([
+      turf.lineString([m.from, target], { leg: 'to' }),
+      turf.lineString([target, to], { leg: 'rest' }),
+    ]));
+    // Big yardages halfway along each leg.
+    legLabels([
+      { at: turf.midpoint(m.from, target).geometry.coordinates as LngLat, extra: 'to', html: `<b>${fmt(m.toTarget)}</b>` },
+      { at: turf.midpoint(target, to).geometry.coordinates as LngLat, extra: 'rest', html: `<b>${fmt(rest)}</b>` },
+    ]);
   } else {
     $('measure').hidden = true;
     targetMarker.remove();
+    legLabels([]);
     (map.getSource('measure') as GeoJSONSource | undefined)?.setData(turf.featureCollection([]));
   }
 }
@@ -436,6 +457,8 @@ function render() {
 function renderArcs(h: Hole, me: LngLat | null) {
   const arcs = greenView || !state.hazards ? [] : distanceArcs(h, me);
   (map.getSource('arcs') as GeoJSONSource | undefined)?.setData(turf.featureCollection(arcs.map((a) => turf.lineString(a.line, { color: a.color }))));
+  // While a target is down, keep its yardages the clearest thing on screen.
+  if (target) { arcLabels([]); layupLabels([]); return; }
   arcLabels(arcs.map((a) => ({ at: a.label, offset: [a.side === 'R' ? 16 : -16, 0] as [number, number], html: `<span style="background:${a.color}">${a.yds}</span>` })));
 }
 
@@ -444,7 +467,8 @@ function renderPinLine(h: Hole, me: LngLat | null, pin: LngLat | null | undefine
   const to = pin ?? h.center;
   const near = me && !greenView && yd(me, h.center) <= APPROACH_YD;
   (map.getSource('pinline') as GeoJSONSource | undefined)?.setData(near ? turf.lineString([me!, to]) : turf.featureCollection([]));
-  map.setLayoutProperty('hole-line', 'visibility', near ? 'none' : 'visible');
+  // The measure legs replace the dashed line of play while a target is down.
+  map.setLayoutProperty('hole-line', 'visibility', near || target ? 'none' : 'visible');
   if (!near) { pinLabel.remove(); return; }
   const d = yd(me!, to);
   // Just short of the pin, so it sits on the green close-up.
