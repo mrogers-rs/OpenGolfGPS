@@ -13,7 +13,7 @@ import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
 import { hazardNumbers, layupMarks } from './hazards.ts';
 import { type Round, newRound, markShot, undoShot, shotDistances, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
 import { initCard, renderCard } from './card.ts';
-import { greenNumbers, measure, yd, MAX_GPS_YD, greenEdges } from './yardage.ts';
+import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 
 const TEST_COURSE: CourseHit = { id: 'way/23143257', name: 'Allenmore Golf Course', center: [-122.4727, 47.2391] };
 /** A hole picked more than this long ago is treated as a new round on reopen. */
@@ -221,9 +221,11 @@ function showHole(fit: boolean) {
   const h = hole();
   if (!h) return;
   $('holeno').textContent = String(h.ref);
-  $('holemeta').textContent = [h.par && `Par ${h.par}`, h.handicap && `HCP ${h.handicap}`].filter(Boolean).join(' · ');
+  const len = Math.round(pathYd([...h.line.slice(0, -1), h.center]));
+  $('holemeta').innerHTML = [h.par && `<b>Par ${h.par}</b>`, `${len} yds`, h.handicap && `HCP ${h.handicap}`].filter(Boolean).join('<i>·</i>');
   (map.getSource('hole') as GeoJSONSource).setData(turf.lineString(h.line));
   flagMarker.setLngLat(pinOf(h) ?? h.pin ?? h.center).addTo(map);
+  if (map.getLayer('trees3d')) applyView();
   if (fit) greenView ? fitGreen(h) : fitHole(h);
   render();
 }
@@ -236,7 +238,7 @@ function fitHole(h: Hole) {
   const cam = map.cameraForBounds(turf.bbox(turf.multiPoint(pts)) as [number, number, number, number], { bearing, padding: { top: 110, bottom: 30, left: 50, right: 50 }, maxZoom: 19 });
   if (!cam) return;
   map.jumpTo({ ...cam, bearing, pitch: 0 });
-  if (state.view === '3d') tiltToFit(pts);
+  if (state.view === '3d' && !greenView) tiltToFit(pts);
 }
 
 /** Tilt the camera (as if standing behind the tee) and zoom/pan until every point is on screen. */
@@ -393,18 +395,22 @@ function renderShots(h: Hole) {
   else info.textContent = me ? '' : 'Shot tracking needs GPS on this hole';
   $('shot-undo').hidden = !shots.length;
   $<HTMLButtonElement>('shot').disabled = !me;
-  $('shot').textContent = shots.length ? `Mark shot ${shots.length + 1}` : 'Mark tee shot';
+  $('shot').querySelector('span')!.textContent = shots.length ? `Shot ${shots.length + 1}` : 'Tee shot';
 }
 
 function renderPace() {
   const t = round ? totals(round) : null;
-  $('card').textContent = t?.holes ? fmtToPar(t.toPar) : 'Card';
+  $('cardlbl').textContent = t?.holes ? `Card ${fmtToPar(t.toPar)}` : 'Card';
+  // Pace banner across the top: green on pace or ahead, amber a little behind, red well behind.
   const el2 = $('pace');
-  if (!round || !course || round.finishedAt) { el2.textContent = ''; return; }
+  const wasHidden = el2.hidden;
+  el2.hidden = !round || !course || !!round.finishedAt;
+  if (wasHidden !== el2.hidden) map.resize();
+  if (el2.hidden || !round || !course) return;
   const p = pace(round, course, state.hole);
   const d = Math.round(p.delta);
-  el2.textContent = `⏱ ${fmtClock(p.elapsed)} · ${d > 0 ? `${d} min behind` : d < 0 ? `${-d} min ahead` : 'on pace'}`;
-  el2.className = d > 5 ? 'poor' : '';
+  el2.className = d > 5 ? 'bad' : d > 0 ? 'warn' : 'ok';
+  el2.innerHTML = `<b>${d > 0 ? `${d} MIN BEHIND` : d < 0 ? `${-d} MIN AHEAD` : 'ON PACE'}</b><span>Round ${fmtClock(p.elapsed)}</span><span>This hole ${Math.floor(p.onHole)} min</span>`;
 }
 
 // ---------- Round ----------
@@ -682,7 +688,8 @@ function setView(v: store.MapView) {
 }
 function applyView() {
   const on = state.satellite;
-  const is3d = state.view === '3d';
+  // Green view is always flat and from above, so trees go back to flat canopies there.
+  const is3d = state.view === '3d' && !greenView;
   map.setLayoutProperty('sat', 'visibility', on ? 'visible' : 'none');
   map.setPaintProperty('bg', 'background-color', on ? '#0d2a14' : MAP.bg);
   for (const k of GOLF_FILLS) map.setPaintProperty(k, 'fill-opacity', on ? 0.18 : 0.95);
@@ -692,7 +699,7 @@ function applyView() {
   map.setLayoutProperty('trees3d', 'visibility', is3d ? 'visible' : 'none');
   for (const k of ['tree', 'treerow']) map.setLayoutProperty(k, 'visibility', !on && !is3d ? 'visible' : 'none');
   // The button shows the view you're in; tapping moves to the next.
-  $('viewtoggle').textContent = is3d ? '3D' : on ? 'Sat' : '2D';
+  $('viewtoggle').textContent = state.view === '3d' ? '3D' : on ? 'Sat' : '2D';
   $<HTMLInputElement>('sat').checked = on;
 }
 $<HTMLInputElement>('hazards').onchange = (e) => { state.hazards = (e.target as HTMLInputElement).checked; store.saveState(state); render(); };
