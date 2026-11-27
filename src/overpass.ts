@@ -104,7 +104,16 @@ export async function loadCourse(id: string, fallbackName?: string): Promise<Cou
   const b = c.bounds!;
   const pad = 0.0015; // ~150 m, catches tees/greens drawn just outside the boundary
   const bbox = `${b.minlat - pad},${b.minlon - pad},${b.maxlat + pad},${b.maxlon + pad}`;
-  const els = await overpass(`[out:json][timeout:60];(nwr["golf"](${bbox});nwr["natural"="water"](${bbox}););out geom;`);
+  // Golf features plus the scenery around them (trees, woods, buildings, paths, streams) for the map view.
+  const els = await overpass(`[out:json][timeout:90];(
+    nwr["golf"](${bbox});
+    nwr["natural"~"^(water|wood|scrub|heath|wetland|tree_row)$"](${bbox});
+    node["natural"="tree"](${bbox});
+    nwr["landuse"="forest"](${bbox});
+    way["building"](${bbox});
+    way["highway"](${bbox});
+    way["waterway"~"^(stream|river|ditch|drain|canal)$"](${bbox});
+  );out geom;`);
   const course = parseCourse(els, { id, name: c.tags?.name ?? fallbackName ?? 'Golf course', boundary });
   if (!course.holes.length) throw new Error('No holes are mapped for this course in OpenStreetMap yet');
   return course;

@@ -33,11 +33,28 @@ export function joinRings(parts: LngLat[][]): LngLat[][] {
   return rings;
 }
 
+/** Bump when the Overpass query or parsing gains new data, so saved courses refresh. */
+export const COURSE_DATA_VERSION = 2;
+
+const PATHS = new Set(['footway', 'path', 'track', 'cycleway', 'bridleway', 'steps', 'pedestrian']);
+
 function kindOf(tags: Record<string, string>): FeatureKind | null {
   const g = tags.golf;
   if (g === 'fairway' || g === 'green' || g === 'tee' || g === 'bunker' || g === 'rough' || g === 'hole' || g === 'driving_range' || g === 'cartpath') return g;
   if (g === 'water_hazard' || g === 'lateral_water_hazard' || tags.natural === 'water') return 'water';
   if (g === 'clubhouse') return 'clubhouse';
+  if (tags.building && tags.building !== 'no') return 'building';
+  const n = tags.natural;
+  if (n === 'wood' || tags.landuse === 'forest') return 'wood';
+  if (n === 'scrub' || n === 'heath') return 'scrub';
+  if (n === 'wetland') return 'wetland';
+  if (n === 'tree') return 'tree';
+  if (n === 'tree_row') return 'treerow';
+  if (tags.waterway && /^(stream|river|ditch|drain|canal)$/.test(tags.waterway)) return 'stream';
+  if (tags.highway) {
+    if (tags.golf_cart === 'designated' || tags.service === 'golf_cart') return 'cartpath';
+    return PATHS.has(tags.highway) ? 'path' : 'road';
+  }
   return null;
 }
 
@@ -75,8 +92,13 @@ export function parseCourse(elements: OverpassElement[], opts: ParseOptions): Co
     const kind = kindOf(tags);
     if (!kind) continue;
     if (kind === 'hole') { if (el.geometry) holeEls.push(el); continue; }
-    if (el.type === 'node') continue;
-    if (kind === 'cartpath') {
+    if (el.type === 'node') {
+      if (kind === 'tree' && el.lat != null) features.push(turf.point([r6(el.lon!), r6(el.lat)], { kind }));
+      continue;
+    }
+    if (kind === 'tree') continue;
+    if (kind === 'cartpath' || kind === 'road' || kind === 'path' || kind === 'stream' || kind === 'treerow') {
+      // Closed ways of these are still lines (e.g. a loop path).
       if (el.geometry) features.push(turf.lineString(ll(el.geometry), { kind }));
       continue;
     }
@@ -121,8 +143,10 @@ export function parseCourse(elements: OverpassElement[], opts: ParseOptions): Co
   const fc = turf.featureCollection(features);
   const bboxSrc = holes.length ? turf.featureCollection(holes.map((h) => turf.lineString(h.line))) : fc;
   const bbox = turf.bbox(bboxSrc) as [number, number, number, number];
-  return { id: opts.id, name: opts.name, bbox, holes, features: fc, fetchedAt: Date.now() };
+  return { id: opts.id, name: opts.name, bbox, holes, features: fc, fetchedAt: Date.now(), v: COURSE_DATA_VERSION };
 }
+
+const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
 
 function num(s?: string) {
   const n = parseInt(s ?? '', 10);

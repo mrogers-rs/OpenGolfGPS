@@ -15,7 +15,9 @@ export interface Hole {
 }
 
 export type FeatureKind =
-  | 'fairway' | 'green' | 'tee' | 'bunker' | 'water' | 'rough' | 'cartpath' | 'hole' | 'driving_range' | 'clubhouse';
+  | 'fairway' | 'green' | 'tee' | 'bunker' | 'water' | 'rough' | 'cartpath' | 'hole' | 'driving_range' | 'clubhouse'
+  // Scenery around the course (map view only):
+  | 'wood' | 'scrub' | 'wetland' | 'building' | 'road' | 'path' | 'stream' | 'treerow' | 'tree';
 
 export interface Course {
   /** OSM id like "way/23143257". */
@@ -26,6 +28,8 @@ export interface Course {
   /** GeoJSON for drawing: polygons/lines with properties.kind. */
   features: GeoJSON.FeatureCollection;
   fetchedAt: number;
+  /** Data version; courses saved before scenery was loaded have none. */
+  v?: number;
 }
 
 /** Minimal Overpass JSON (out geom). */

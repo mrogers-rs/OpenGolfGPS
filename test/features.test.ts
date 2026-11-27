@@ -92,3 +92,25 @@ test('pace of play', () => {
   const r10 = newRound(course, 9, 255, 0);
   assert.equal(pace(r10, course, 9, 2 * min).delta, 0);
 });
+
+test('scenery is parsed for the map view', () => {
+  const sq = (x: number, y: number, d = 0.0003) => [[y, x], [y, x + d], [y + d, x + d], [y + d, x], [y, x]].map(([lat, lon]) => ({ lat, lon }));
+  const extra = [
+    { type: 'node', id: 1, lat: 47.24, lon: -122.47, tags: { natural: 'tree' } },
+    { type: 'way', id: 2, tags: { natural: 'wood' }, geometry: sq(-122.475, 47.236) },
+    { type: 'way', id: 3, tags: { building: 'yes' }, geometry: sq(-122.471, 47.243, 0.0001) },
+    { type: 'way', id: 4, tags: { highway: 'footway' }, geometry: [{ lat: 47.24, lon: -122.47 }, { lat: 47.241, lon: -122.471 }] },
+    { type: 'way', id: 5, tags: { waterway: 'stream' }, geometry: [{ lat: 47.238, lon: -122.47 }, { lat: 47.239, lon: -122.471 }] },
+    { type: 'way', id: 6, tags: { highway: 'service', golf_cart: 'designated' }, geometry: [{ lat: 47.238, lon: -122.47 }, { lat: 47.239, lon: -122.471 }] },
+  ];
+  const c = parseCourse([...data.elements, ...extra], { id: 'x', name: 'x' });
+  const kinds = (k: string) => c.features.features.filter((f) => f.properties?.kind === k);
+  assert.equal(kinds('tree')[0].geometry.type, 'Point');
+  assert.equal(kinds('wood')[0].geometry.type, 'Polygon');
+  assert.equal(kinds('building').length, 1);
+  assert.equal(kinds('path')[0].geometry.type, 'LineString');
+  assert.equal(kinds('stream').length, 1);
+  assert.equal(kinds('cartpath').length, 1);
+  assert.equal(c.holes.length, 18);
+  assert.ok((c.v ?? 0) >= 2);
+});
