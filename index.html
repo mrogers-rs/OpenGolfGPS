@@ -23,6 +23,7 @@
         </button>
         <button id="next" class="nav" aria-label="Next hole">›</button>
         <button id="auto" class="pill" aria-pressed="true" title="Auto-advance to the next hole">AUTO</button>
+        <button id="card" class="pill" aria-label="Scorecard">Card</button>
         <button id="menu" class="pill" aria-label="Courses and settings">☰</button>
       </header>
 
@@ -33,14 +34,24 @@
           <div><span class="lbl">TO CENTER</span><b id="m-then">–</b></div>
           <button id="m-clear" aria-label="Clear target">✕</button>
         </div>
-        <button id="recenter" class="pill fab" aria-label="Show whole hole">⤢</button>
+        <div id="tools">
+          <button id="recenter" class="pill" aria-label="Show whole hole">⤢</button>
+          <button id="greenview" class="pill" aria-pressed="false" aria-label="Green view">Green</button>
+          <button id="fly" class="pill" aria-label="Fly over the hole">Fly</button>
+        </div>
+        <div id="greeninfo" hidden></div>
+        <div id="shotbar">
+          <button id="shot" class="pill">Mark shot</button>
+          <span id="shotinfo"></span>
+          <button id="shot-undo" class="pill" hidden aria-label="Undo last shot mark">Undo</button>
+        </div>
       </main>
 
       <footer id="nums">
         <div class="num side"><span class="lbl">FRONT</span><b id="front">–</b></div>
-        <div class="num mid"><span class="lbl">CENTER</span><b id="center">–</b></div>
+        <div class="num mid"><span class="lbl" id="centerlbl">CENTER</span><b id="center">–</b></div>
         <div class="num side"><span class="lbl">BACK</span><b id="back">–</b></div>
-        <div id="status"><span id="gps">GPS off</span><span id="wake"></span></div>
+        <div id="status"><span id="gps">GPS off</span><span id="pace"></span><span id="wake"></span></div>
       </footer>
     </div>
 
@@ -65,6 +76,12 @@
       </div>
       <h3>Settings</h3>
       <label class="check"><input type="checkbox" id="sat" /> Satellite imagery</label>
+      <label class="check"><input type="checkbox" id="hazards" /> Hazard and layup numbers on the map</label>
+      <label class="check">Pace of play target (18 holes)
+        <select id="pace-target">
+          <option value="225">3:45</option><option value="240">4:00</option><option value="255">4:15</option><option value="270">4:30</option><option value="285">4:45</option>
+        </select>
+      </label>
       <label class="check"><input type="checkbox" id="sim" /> Simulate location (tap map to move yourself)</label>
       <p class="fine">Course data © OpenStreetMap contributors (ODbL). Imagery © Esri and partners.</p>
     </dialog>
@@ -72,6 +89,26 @@
     <dialog id="holepick">
       <form method="dialog" class="sheet-head"><h2>Go to hole</h2><button aria-label="Close">✕</button></form>
       <div id="holegrid"></div>
+    </dialog>
+
+    <dialog id="cardsheet">
+      <form method="dialog" class="sheet-head"><h2><span id="c-hole">Hole</span> <small id="c-par"></small></h2><button aria-label="Close">✕</button></form>
+      <div class="entry">
+        <span class="lbl">SCORE</span><div id="c-strokes" class="chips"></div>
+        <span class="lbl">PUTTS</span><div id="c-putts" class="chips"></div>
+        <div id="c-fw-row"><span class="lbl">FAIRWAY</span><div id="c-fw" class="chips"></div></div>
+        <span class="lbl">PENALTIES</span><div id="c-pen" class="chips"></div>
+        <div id="c-sand" class="chips"></div>
+        <p id="c-shots" class="fine"></p>
+      </div>
+      <h3>Scorecard · <span id="c-score"></span></h3>
+      <table class="card"><thead><tr><th>Hole</th><th>Par</th><th>Score</th><th>Putts</th><th>FW</th><th>GIR</th></tr></thead><tbody id="c-table"></tbody></table>
+      <h3>This round</h3>
+      <div id="c-stats" class="stats"></div>
+      <div class="row"><button id="c-finish">Finish round</button><button id="c-new">New round</button></div>
+      <div id="c-career"></div>
+      <h3>Past rounds</h3>
+      <ul id="c-history" class="list"></ul>
     </dialog>
 
     <script type="module" src="/src/main.ts"></script>

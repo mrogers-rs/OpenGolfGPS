@@ -3,12 +3,15 @@ import './style.css';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import * as turf from '@turf/turf';
 import type { Course, Hole, LngLat } from './types.ts';
-import { greenNumbers, measure } from './yardage.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { loadCourse, searchCourses, coursesNear, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
+import { hazardNumbers, layupMarks } from './hazards.ts';
+import { type Round, newRound, markShot, undoShot, shotDistances, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
+import { initCard, renderCard } from './card.ts';
+import { greenNumbers, measure, yd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 
 const TEST_COURSE: CourseHit = { id: 'way/23143257', name: 'Allenmore Golf Course', center: [-122.4727, 47.2391] };
 /** A hole picked more than this long ago is treated as a new round on reopen. */
@@ -24,6 +27,10 @@ let accuracy = Infinity;
 let target: LngLat | null = null;
 let sim = params.has('sim');
 let lastFixAt = 0;
+let round: Round | null = null;
+let greenView = false;
+/** A round older than this (since its start) isn't resumed. */
+const ROUND_MAX_MS = 14 * 3600 * 1000;
 
 // ---------- Map ----------
 const map = new maplibregl.Map({
@@ -35,6 +42,7 @@ const map = new maplibregl.Map({
       course: { type: 'geojson', data: turf.featureCollection([]), attribution: '© OpenStreetMap contributors' },
       hole: { type: 'geojson', data: turf.featureCollection([]) },
       measure: { type: 'geojson', data: turf.featureCollection([]) },
+      shots: { type: 'geojson', data: turf.featureCollection([]) },
     },
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
@@ -48,6 +56,8 @@ const map = new maplibregl.Map({
       { id: 'cartpath', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'cartpath'], paint: { 'line-color': '#999', 'line-width': 1, 'line-opacity': 0.6 } },
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
       { id: 'hole-line', type: 'line', source: 'hole', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 2] } },
+      { id: 'shot-line', type: 'line', source: 'shots', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ff7a1a', 'line-width': 2.5 } },
+      { id: 'shot-pt', type: 'circle', source: 'shots', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#ff7a1a', 'circle-stroke-color': '#000', 'circle-stroke-width': 1.5 } },
       { id: 'measure-line', type: 'line', source: 'measure', paint: { 'line-color': '#ffd400', 'line-width': 3 } },
     ],
   },
@@ -70,6 +80,25 @@ const flagMarker = new maplibregl.Marker({ element: el('flag', '⛳'), anchor: '
 const frontMarker = new maplibregl.Marker({ element: el('edge') });
 const backMarker = new maplibregl.Marker({ element: el('edge') });
 
+/** A reusable set of HTML label markers (hazards, layups). */
+function markerPool(cls: string) {
+  const pool: maplibregl.Marker[] = [];
+  return (items: { at: LngLat; html: string; extra?: string; offset?: [number, number] }[]) => {
+    while (pool.length < items.length) pool.push(new maplibregl.Marker({ element: el(cls) }));
+    pool.forEach((m, i) => {
+      const it = items[i];
+      if (!it) return void m.remove();
+      const e = m.getElement();
+      if (e.innerHTML !== it.html) e.innerHTML = it.html;
+      e.classList.toggle('bunker', it.extra === 'bunker');
+      e.classList.toggle('water', it.extra === 'water');
+      m.setOffset(it.offset ?? [0, 0]).setLngLat(it.at).addTo(map);
+    });
+  };
+}
+const hazardLabels = markerPool('hz');
+const layupLabels = markerPool('lay');
+
 function el(cls: string, text = '') {
   const d = document.createElement('div');
   d.className = cls;
@@ -85,6 +114,15 @@ targetMarker.on('drag', () => {
 
 map.on('click', (e) => {
   const p: LngLat = [e.lngLat.lng, e.lngLat.lat];
+  const h = hole();
+  if (greenView && h?.green && turf.booleanPointInPolygon(p, turf.polygon([h.green]))) {
+    // In green view, tapping the green sets today's pin.
+    const r = getRound(true)!;
+    (r.holes[h.ref] ??= {}).pin = p;
+    saveRound(r);
+    showHole(false);
+    return;
+  }
   if (sim) {
     onPosition(p, 3);
     return;
@@ -96,6 +134,7 @@ map.on('click', (e) => {
 // ---------- Course ----------
 function setCourse(c: Course, keepHole = false) {
   course = c;
+  round = resumeRound(c);
   state.courseId = c.id;
   const fresh = Date.now() - state.holeSetAt > ROUND_RESET_MS;
   if (!keepHole || fresh || state.hole >= c.holes.length) state.hole = 0;
@@ -120,6 +159,8 @@ function goHole(i: number, _manual: boolean) {
   state.holeSetAt = Date.now();
   store.saveState(state);
   target = null;
+  greenView = false;
+  noteArrival();
   showHole(true);
 }
 
@@ -129,8 +170,8 @@ function showHole(fit: boolean) {
   $('holeno').textContent = String(h.ref);
   $('holemeta').textContent = [h.par && `Par ${h.par}`, h.handicap && `HCP ${h.handicap}`].filter(Boolean).join(' · ');
   (map.getSource('hole') as GeoJSONSource).setData(turf.lineString(h.line));
-  flagMarker.setLngLat(h.pin ?? h.center).addTo(map);
-  if (fit) fitHole(h);
+  flagMarker.setLngLat(pinOf(h) ?? h.pin ?? h.center).addTo(map);
+  if (fit) greenView ? fitGreen(h) : fitHole(h);
   render();
 }
 
@@ -140,7 +181,49 @@ function fitHole(h: Hole) {
   if (player && turf.distance(player, h.center, { units: 'meters' }) < 640) pts.push(player);
   const bearing = turf.bearing(h.line[0], h.center);
   const cam = map.cameraForBounds(turf.bbox(turf.multiPoint(pts)) as [number, number, number, number], { bearing, padding: { top: 110, bottom: 30, left: 50, right: 50 }, maxZoom: 19 });
-  if (cam) map.jumpTo({ ...cam, bearing });
+  if (cam) map.jumpTo({ ...cam, bearing, pitch: 0 });
+}
+
+/** Close-up of the green, from the direction you're approaching. */
+function fitGreen(h: Hole) {
+  const ring = h.green ?? [h.center];
+  const from = usablePlayer(h) ?? h.line[Math.max(0, h.line.length - 2)];
+  const bearing = turf.bearing(from, h.center);
+  const box = turf.bbox(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as [number, number, number, number];
+  const cam = map.cameraForBounds(box, { bearing, padding: { top: 70, bottom: 40, left: 40, right: 70 }, maxZoom: 21 });
+  if (cam) map.jumpTo({ ...cam, bearing, pitch: 0 });
+}
+
+// ---------- Flyover ----------
+let flying = false;
+async function flyover() {
+  const h = hole();
+  if (!h || flying) return;
+  flying = true;
+  $('fly').setAttribute('aria-pressed', 'true');
+  const pts = [...h.line.slice(0, -1), h.center];
+  const stop = () => { flying = false; };
+  map.once('touchstart', stop);
+  map.once('mousedown', stop);
+  const ease = (o: maplibregl.EaseToOptions) => new Promise<void>((res) => { map.once('moveend', () => res()); map.easeTo(o); });
+  try {
+    await ease({ center: pts[0], zoom: 17.5, pitch: 60, bearing: turf.bearing(pts[0], pts[1]), duration: 900 });
+    for (let i = 1; i < pts.length && flying; i++) {
+      const len = turf.distance(pts[i - 1], pts[i], { units: 'meters' });
+      const last = i === pts.length - 1;
+      const bearing = turf.bearing(pts[i - 1], pts[i]);
+      // Stop a little short of the green so it fills the screen.
+      const center = last ? (turf.destination(pts[i], 35, bearing + 180, { units: 'meters' }).geometry.coordinates as LngLat) : pts[i];
+      await ease({ center, bearing, zoom: last ? 18.6 : 17.5, pitch: last ? 55 : 60, duration: Math.max(1200, len * 14), easing: (t) => t });
+    }
+    if (flying) await new Promise((r) => setTimeout(r, 1200));
+  } finally {
+    flying = false;
+    $('fly').setAttribute('aria-pressed', 'false');
+    map.off('touchstart', stop);
+    map.off('mousedown', stop);
+    greenView ? fitGreen(h) : fitHole(h);
+  }
 }
 
 // ---------- Numbers ----------
@@ -150,8 +233,11 @@ function render() {
   const h = hole();
   if (!h) return;
   const n = greenNumbers(h, player);
+  const pin = pinOf(h);
+  const me = usablePlayer(h);
   $('front').textContent = fmt(n.front);
-  $('center').textContent = fmt(n.center);
+  $('center').textContent = fmt(pin ? greenNumbers({ ...h, center: pin }, player).center : n.center);
+  $('centerlbl').textContent = pin ? 'PIN' : 'CENTER';
   $('back').textContent = fmt(n.back);
   frontMarker.setLngLat(n.frontPt).addTo(map);
   backMarker.setLngLat(n.backPt).addTo(map);
@@ -163,6 +249,11 @@ function render() {
     gps.textContent = sim ? 'Simulated location' : `GPS ±${Math.round(accuracy * 1.0936)} yd`;
     gps.className = accuracy <= 10 ? 'good' : 'poor';
   }
+
+  renderHazards(h, me);
+  renderGreenInfo(h, n.frontPt, n.backPt);
+  renderShots(h);
+  renderPace();
 
   if (target) {
     const m = measure(h, player, target);
@@ -178,6 +269,105 @@ function render() {
   }
 }
 
+function usablePlayer(h: Hole): LngLat | null {
+  return player && yd(player, h.center) <= MAX_GPS_YD ? player : null;
+}
+
+function renderHazards(h: Hole, me: LngLat | null) {
+  if (!course || !state.hazards || greenView) { hazardLabels([]); layupLabels([]); return; }
+  const hz = hazardNumbers(course, h, me);
+  // Labels sit beside the hazard, away from the line of play (the map is turned so you face the green).
+  hazardLabels(hz.map((z) => ({ at: z.at, extra: z.kind, offset: [z.side === 'L' ? -26 : z.side === 'R' ? 26 : 0, 0] as [number, number], html: `<b>${fmt(z.reach)}</b><i>${fmt(z.carry)}</i>` })));
+  const toGreen = me ? yd(me, h.center) : Infinity;
+  const lay = h.par === 3 ? [] : layupMarks(h, me).filter((l) => l.toGreen < toGreen - 20);
+  layupLabels(lay.map((l) => ({ at: l.at, html: me ? `${l.toGreen}<small>${fmt(yd(me, l.at))}</small>` : String(l.toGreen) })));
+}
+
+function renderGreenInfo(h: Hole, frontPt: LngLat, backPt: LngLat) {
+  const box = $('greeninfo');
+  box.hidden = !greenView;
+  $('greenview').setAttribute('aria-pressed', String(greenView));
+  if (!greenView) return;
+  const depth = yd(frontPt, backPt);
+  const pin = pinOf(h);
+  if (!h.green) { box.textContent = 'No green mapped for this hole.'; return; }
+  if (pin) {
+    // Where the pin sits along the line you're approaching on.
+    const from = usablePlayer(h) ?? h.line[Math.max(0, h.line.length - 2)];
+    const [f, b] = greenEdges({ ...h, center: pin }, from);
+    box.innerHTML = `Depth <b>${fmt(depth)}</b> · Pin <b>${fmt(yd(f, pin))}</b> on, <b>${fmt(yd(pin, b))}</b> to back<br><small>Tap the green to move today's pin</small>`;
+  } else {
+    box.innerHTML = `Depth <b>${fmt(depth)}</b><br><small>Tap the green to set today's pin</small>`;
+  }
+}
+
+function renderShots(h: Hole) {
+  const s = round?.holes[h.ref];
+  const shots = s?.shots ?? [];
+  const fc: GeoJSON.Feature[] = shots.map((p) => turf.point(p.at));
+  if (shots.length > 1) fc.push(turf.lineString(shots.map((p) => p.at)));
+  const me = usablePlayer(h);
+  const last = shots[shots.length - 1];
+  // Live: from your last mark to where you are now (walking to the ball).
+  if (last && me) fc.push(turf.lineString([last.at, me]));
+  (map.getSource('shots') as GeoJSONSource | undefined)?.setData(turf.featureCollection(fc));
+  const d = shotDistances(s);
+  const info = $('shotinfo');
+  if (last && me && (yd(last.at, me) >= 5 || !d.length)) info.innerHTML = `Shot ${shots.length}: <b>${fmt(yd(last.at, me))}</b> yd`;
+  else if (d.length) info.innerHTML = `Last shot <b>${fmt(d[d.length - 1])}</b> yd`;
+  else info.textContent = me ? '' : 'Shot tracking needs GPS on this hole';
+  $('shot-undo').hidden = !shots.length;
+  $<HTMLButtonElement>('shot').disabled = !me;
+  $('shot').textContent = shots.length ? `Mark shot ${shots.length + 1}` : 'Mark tee shot';
+}
+
+function renderPace() {
+  const t = round ? totals(round) : null;
+  $('card').textContent = t?.holes ? fmtToPar(t.toPar) : 'Card';
+  const el2 = $('pace');
+  if (!round || !course || round.finishedAt) { el2.textContent = ''; return; }
+  const p = pace(round, course, state.hole);
+  const d = Math.round(p.delta);
+  el2.textContent = `⏱ ${fmtClock(p.elapsed)} · ${d > 0 ? `${d} min behind` : d < 0 ? `${-d} min ahead` : 'on pace'}`;
+  el2.className = d > 5 ? 'poor' : '';
+}
+
+// ---------- Round ----------
+function resumeRound(c: Course): Round | null {
+  const r = state.roundId ? store.getRound(state.roundId) : null;
+  if (r && r.courseId === c.id && !r.finishedAt && Date.now() - r.startedAt < ROUND_MAX_MS) return r;
+  return null;
+}
+
+/** The round in progress; `create` starts one now (on the current hole). */
+function getRound(create: boolean): Round | null {
+  if (!round && create && course) {
+    round = newRound(course, state.hole, state.paceTarget ?? DEFAULT_PACE_MIN);
+    state.roundId = round.id;
+    store.saveState(state);
+    noteArrival();
+    saveRound(round);
+  }
+  return round;
+}
+
+function saveRound(r: Round) {
+  round = r;
+  store.saveRound(r);
+}
+
+function noteArrival() {
+  const h = hole();
+  if (!round || !h || round.finishedAt) return;
+  const s = (round.holes[h.ref] ??= {});
+  if (!s.arrived) { s.arrived = Date.now(); saveRound(round); }
+}
+
+/** Today's pin for the hole (set in green view), if any. */
+function pinOf(h: Hole): LngLat | undefined {
+  return round?.holes[h.ref]?.pin;
+}
+
 // ---------- Location ----------
 let watchId: number | null = null;
 
@@ -190,7 +380,11 @@ function onPosition(p: LngLat, acc: number) {
   if (course) {
     if (first && Date.now() - state.holeSetAt > ROUND_RESET_MS) {
       const at = holeAtStart(course.holes, p);
-      if (at != null) return goHole(at, false);
+      if (at != null) {
+        goHole(at, false);
+        if (!round) { getRound(true); render(); } // starts the pace clock when you get to a tee
+        return;
+      }
     }
     if (state.auto) {
       const nxt = autoAdvance(course.holes, state.hole, p);
@@ -236,6 +430,37 @@ $('prev').onclick = () => goHole(state.hole - 1, true);
 $('next').onclick = () => goHole(state.hole + 1, true);
 $('recenter').onclick = () => { const h = hole(); if (h) fitHole(h); };
 $('m-clear').onclick = () => { target = null; render(); };
+$('greenview').onclick = () => { const h = hole(); if (!h) return; greenView = !greenView; target = null; showHole(true); };
+$('fly').onclick = () => { if (flying) flying = false; else flyover(); };
+$('shot').onclick = () => {
+  const h = hole();
+  if (!h) return;
+  const me = usablePlayer(h);
+  if (!me) return;
+  const r = getRound(true)!;
+  markShot(r, h.ref, me);
+  saveRound(r);
+  render();
+};
+$('shot-undo').onclick = () => { const h = hole(); if (h && round) { undoShot(round, h.ref); saveRound(round); render(); } };
+initCard({
+  course: () => course,
+  hole,
+  round: getRound,
+  save: saveRound,
+  newRound: () => {
+    if (round && !round.finishedAt) { round.finishedAt = Date.now(); store.saveRound(round); }
+    round = null;
+    state.roundId = undefined;
+    store.saveState(state);
+    getRound(true);
+    showHole(false);
+  },
+  finishRound: () => { if (round) { round.finishedAt = Date.now(); store.saveRound(round); round = null; state.roundId = undefined; store.saveState(state); showHole(false); } },
+  goHole: (i) => goHole(i, true),
+  changed: () => render(),
+});
+setInterval(() => { if (round && document.visibilityState === 'visible') renderPace(); }, 30000);
 const autoBtn = $('auto');
 const syncAuto = () => autoBtn.setAttribute('aria-pressed', String(state.auto));
 autoBtn.onclick = () => { state.auto = !state.auto; store.saveState(state); syncAuto(); };
@@ -265,6 +490,8 @@ function openSheet() {
   renderSaved();
   $<HTMLInputElement>('sat').checked = state.satellite;
   $<HTMLInputElement>('sim').checked = sim;
+  $<HTMLInputElement>('hazards').checked = state.hazards !== false;
+  $<HTMLSelectElement>('pace-target').value = String(state.paceTarget ?? DEFAULT_PACE_MIN);
   sheet.showModal();
 }
 
@@ -367,6 +594,13 @@ $<HTMLInputElement>('sat').onchange = (e) => {
   map.setLayoutProperty('sat', 'visibility', state.satellite ? 'visible' : 'none');
   for (const k of ['fairway', 'tee', 'green', 'bunker', 'water']) map.setPaintProperty(k, 'fill-opacity', state.satellite ? 0.18 : 0.85);
 };
+$<HTMLInputElement>('hazards').onchange = (e) => { state.hazards = (e.target as HTMLInputElement).checked; store.saveState(state); render(); };
+$<HTMLSelectElement>('pace-target').onchange = (e) => {
+  state.paceTarget = Number((e.target as HTMLSelectElement).value);
+  store.saveState(state);
+  if (round) { round.paceTarget = state.paceTarget; saveRound(round); }
+  render();
+};
 $<HTMLInputElement>('sim').onchange = (e) => {
   sim = (e.target as HTMLInputElement).checked;
   if (sim) stopGps();
@@ -380,6 +614,10 @@ function esc(s: string) {
 
 // ---------- Start ----------
 map.on('load', () => {
+  // Start with the attribution collapsed to its (i) button so it doesn't cover the shot bar.
+  const attrib = document.querySelector('.maplibregl-ctrl-attrib');
+  attrib?.classList.remove('maplibregl-compact-show');
+  attrib?.removeAttribute('open');
   const c = state.courseId ? store.getCourse(state.courseId) : null;
   if (c) setCourse(c, true);
   else openSheet();
@@ -398,4 +636,4 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 }
 
 // For tests / debugging in the console.
-(window as any).golf = { map, get course() { return course; }, get state() { return state; }, onPosition, setCourse };
+(window as any).golf = { map, get course() { return course; }, get state() { return state; }, get round() { return round; }, onPosition, setCourse };
