@@ -168,3 +168,65 @@ select { font: inherit; padding: 8px; border-radius: 10px; background: #000; col
 @media (orientation: landscape) and (min-width: 700px) {
   #app { grid-template-rows: auto auto 1fr; grid-template-areas: 'brand brand' 'bar bar' 'map nums'; }
 }
+
+/* ---------- Cart-screen layout: pace banner, hole card on the map, yardage card, tab bar ---------- */
+:root { --glass: rgba(8, 12, 10, .82); --glass-line: rgba(255,255,255,.14); --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444; }
+#app { grid-template-rows: auto auto 1fr auto auto; grid-template-areas: 'brand' 'pace' 'map' 'nums' 'tabs'; }
+
+#pace { grid-area: pace; display: flex; align-items: baseline; gap: 14px; padding: 7px 12px; font-size: 14px; color: #000; }
+#pace[hidden] { display: none; }
+#pace b { font-size: 17px; font-weight: 900; letter-spacing: .04em; margin-right: auto; }
+#pace span { font-weight: 700; opacity: .8; }
+#pace.ok { background: var(--ok); }
+#pace.warn { background: var(--warn); }
+#pace.bad { background: var(--bad); color: #fff; }
+
+#holecard { position: absolute; z-index: 3; left: 10px; top: 10px; display: grid; grid-template-columns: auto auto auto; grid-template-rows: auto auto; align-items: center; gap: 0 2px; padding: 4px; border-radius: 18px; background: var(--glass); border: 1px solid var(--glass-line); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+#holecard .nav { width: 40px; min-height: 64px; padding: 0; font-size: 30px; border: none; background: none; }
+#holeinfo { display: grid; justify-items: center; gap: 0; padding: 2px 6px; min-height: 0; background: none; border: none; }
+#holeinfo .hl { font-size: 11px; letter-spacing: .18em; color: var(--muted); font-weight: 800; }
+#holeno { font-size: 40px; font-weight: 900; line-height: .95; }
+#holemeta { display: flex; gap: 5px; font-size: 13px; color: #ddd; white-space: nowrap; font-weight: 600; }
+#holemeta b { color: var(--accent); font-weight: 800; }
+#holemeta i { font-style: normal; color: #666; }
+#auto { grid-column: 1 / -1; min-height: 30px; margin: 2px 4px 2px; padding: 2px 8px; font-size: 12px; letter-spacing: .12em; border-radius: 10px; border: 1px solid #444; background: transparent; color: var(--muted); }
+#auto[aria-pressed='true'] { background: rgba(255,212,0,.16); color: var(--accent); border-color: rgba(255,212,0,.5); }
+
+#measure { top: 128px; left: 10px; right: 80px; }
+#tools .pill { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 14px; }
+#shotbar { right: 44px; }
+#shotinfo { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 12px; flex: 0 1 auto; }
+
+/* Yardage card */
+#nums { margin: 0; padding: 8px 10px 4px; gap: 8px; background: #050705; border-top: none; }
+#nums .num { padding: 6px 4px 8px; border-radius: 16px; background: #141a16; border: 1px solid #222a24; }
+#nums .mid { background: linear-gradient(180deg, #1d2a20, #121a14); border-color: rgba(255,212,0,.35); box-shadow: inset 0 0 0 1px rgba(255,212,0,.08); }
+.side b { font-size: 46px; }
+.mid b { font-size: 78px; }
+#status { padding: 4px 4px 0; }
+
+/* Tab bar */
+#tabs { grid-area: tabs; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 6px 8px calc(var(--safe-b) + 6px); background: #050705; border-top: 1px solid #1a1f1b; }
+.tab { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 54px; padding: 6px 2px; border-radius: 14px; border: 1px solid transparent; background: transparent; font-size: 13px; color: #cfd8d2; }
+.tab svg { width: 24px; height: 24px; }
+.tab:active, .tab[aria-pressed='true'] { background: #1a231d; border-color: #2f3b33; color: var(--accent); }
+#shot { color: #ffb070; }
+#shot:disabled { opacity: .4; }
+#nums { padding-bottom: 6px; }
+#nums, #nums .num { min-width: 0; }
+
+@media (orientation: landscape) and (min-width: 700px) {
+  #app { grid-template-columns: 1fr 280px; grid-template-rows: auto auto 1fr auto; grid-template-areas: 'brand brand' 'pace pace' 'map nums' 'map tabs'; }
+  #nums { grid-template-columns: 1fr; align-content: center; border-left: 1px solid #1a1f1b; }
+  #tabs { grid-template-columns: repeat(2, 1fr); border-left: 1px solid #1a1f1b; }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .mid b { font-size: 60px; } .side b { font-size: 34px; }
+}
+@media (max-width: 480px) {
+  #holecard .nav { width: 32px; min-height: 52px; font-size: 26px; }
+  #holeno { font-size: 32px; }
+  #holemeta { font-size: 12px; }
+  #auto { min-height: 24px; font-size: 11px; }
+  #measure { top: 112px; }
+}

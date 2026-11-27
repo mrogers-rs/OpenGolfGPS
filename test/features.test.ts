@@ -114,3 +114,12 @@ test('scenery is parsed for the map view', () => {
   assert.equal(c.holes.length, 18);
   assert.ok((c.v ?? 0) >= 2);
 });
+
+test('hazards and layups work from anywhere, including behind the green or on another hole', () => {
+  for (const h of course.holes) {
+    for (const p of [h.center, course.holes[(h.ref + 6) % 18].line[0], [h.center[0] + 0.0004, h.center[1] + 0.0004] as [number, number]]) {
+      hazardNumbers(course, h, p);
+      layupMarks(h, p);
+    }
+  }
+});
