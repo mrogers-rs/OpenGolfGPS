@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Golf GPS" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <link rel="icon" href="/icons/icon-192.png" />
+    <title>Golf GPS</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="bar">
+        <button id="prev" class="nav" aria-label="Previous hole">‹</button>
+        <button id="holeinfo" aria-label="Pick hole">
+          <span id="holeno">–</span>
+          <span id="holemeta"></span>
+        </button>
+        <button id="next" class="nav" aria-label="Next hole">›</button>
+        <button id="auto" class="pill" aria-pressed="true" title="Auto-advance to the next hole">AUTO</button>
+        <button id="menu" class="pill" aria-label="Courses and settings">☰</button>
+      </header>
+
+      <main id="mapwrap">
+        <div id="map"></div>
+        <div id="measure" hidden>
+          <div><span class="lbl">TO TARGET</span><b id="m-to">–</b></div>
+          <div><span class="lbl">TO CENTER</span><b id="m-then">–</b></div>
+          <button id="m-clear" aria-label="Clear target">✕</button>
+        </div>
+        <button id="recenter" class="pill fab" aria-label="Show whole hole">⤢</button>
+      </main>
+
+      <footer id="nums">
+        <div class="num side"><span class="lbl">FRONT</span><b id="front">–</b></div>
+        <div class="num mid"><span class="lbl">CENTER</span><b id="center">–</b></div>
+        <div class="num side"><span class="lbl">BACK</span><b id="back">–</b></div>
+        <div id="status"><span id="gps">GPS off</span><span id="wake"></span></div>
+      </footer>
+    </div>
+
+    <dialog id="sheet">
+      <form method="dialog" class="sheet-head"><h2>Courses</h2><button aria-label="Close">✕</button></form>
+      <div class="row">
+        <input id="q" type="search" placeholder="Search course name" enterkeyhint="search" autocomplete="off" />
+        <button id="search">Search</button>
+      </div>
+      <div class="row">
+        <button id="near">Courses near me</button>
+        <button id="test-course">Allenmore (test)</button>
+      </div>
+      <p id="msg" class="msg"></p>
+      <ul id="results" class="list"></ul>
+      <h3>Saved for offline</h3>
+      <ul id="saved" class="list"></ul>
+      <h3>This course</h3>
+      <div class="row">
+        <button id="dl-tiles">Download map for offline</button>
+        <button id="refresh">Refresh course data</button>
+      </div>
+      <h3>Settings</h3>
+      <label class="check"><input type="checkbox" id="sat" /> Satellite imagery</label>
+      <label class="check"><input type="checkbox" id="sim" /> Simulate location (tap map to move yourself)</label>
+      <p class="fine">Course data © OpenStreetMap contributors (ODbL). Imagery © Esri and partners.</p>
+    </dialog>
+
+    <dialog id="holepick">
+      <form method="dialog" class="sheet-head"><h2>Go to hole</h2><button aria-label="Close">✕</button></form>
+      <div id="holegrid"></div>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
