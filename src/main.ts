@@ -304,8 +304,11 @@ function fitPadding() {
   const tools = document.getElementById('tools')?.getBoundingClientRect();
   const cardBottom = card && card.height ? card.bottom - box.top : 110;
   const toolsW = tools && tools.width ? box.right - tools.left : 76;
+  // In landscape the yardage card floats at the top of the map: keep the hole below it.
+  const nums = document.getElementById('nums')?.getBoundingClientRect();
+  const numsBottom = nums && nums.height && nums.top < box.top + box.height / 2 ? nums.bottom - box.top : 0;
   return wide()
-    ? { top: Math.max(96, cardBottom * 0.75), bottom: 72, left: 56, right: toolsW + 24 }
+    ? { top: Math.max(96, cardBottom * 0.75, numsBottom + 16), bottom: 72, left: 56, right: toolsW + 24 }
     : { top: cardBottom + 28, bottom: 72, left: 52, right: toolsW + 16 };
 }
 
@@ -478,8 +481,6 @@ function render() {
 function renderArcs(h: Hole, me: LngLat | null) {
   const arcs = greenView || !state.hazards ? [] : distanceArcs(h, me);
   (map.getSource('arcs') as GeoJSONSource | undefined)?.setData(turf.featureCollection(arcs.map((a) => turf.lineString(a.line, { color: a.color }))));
-  // While a target is down, keep its yardages the clearest thing on screen.
-  if (shownTarget) { arcLabels([]); return; }
   arcLabels(arcs.map((a) => ({ at: a.label, offset: [a.side === 'R' ? 16 : -16, 0] as [number, number], html: `<span style="background:${a.color}">${a.yds}</span>` })));
 }
 
