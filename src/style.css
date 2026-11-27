@@ -519,3 +519,59 @@ input[type='search'] { min-height: 52px; }
 .mk > * { transform: scaleX(calc(1 / var(--sx))); }
 .mk > .crosshair { pointer-events: auto; }
 #map .maplibregl-ctrl { transform: scaleX(calc(1 / var(--sx))); transform-origin: 0 0; }
+
+/* ---------- Course editor: a bar over the bottom of the map ---------- */
+body.editing { --sx: 1; }
+body.editing #tabs, body.editing #holecard, body.editing #measure, body.editing #greeninfo, body.editing #fly, body.editing #viewtoggle { display: none !important; }
+body.editing #app { grid-template-areas: 'brand' 'pace' 'nums' 'map'; grid-template-columns: 1fr; grid-template-rows: auto auto auto 1fr; }
+#editbar { position: absolute; z-index: 5; left: 8px; right: 8px; bottom: calc(var(--safe-b) + 8px); display: grid; gap: 6px; padding: 8px; border-radius: 18px; background: var(--glass); border: 1px solid var(--glass-line); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+#editbar[hidden] { display: none; }
+#editbar button { min-height: 48px; border-radius: 12px; font-size: 16px; font-weight: 700; padding: 4px 10px; }
+#editbar button[aria-pressed='true'] { background: var(--accent); color: #000; border-color: var(--accent); }
+.e-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.e-hole .nav { width: 48px; font-size: 28px; padding: 0 !important; }
+.e-title { min-width: 62px; text-align: center; font-size: 12px; letter-spacing: .14em; font-weight: 800; color: var(--muted); white-space: nowrap; }
+.e-title b { font-size: 30px; color: #fff; letter-spacing: 0; margin-left: 4px; vertical-align: -4px; }
+.e-par { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.e-par .e-title { min-width: 0; margin-right: 2px; }
+.e-par button { min-width: 48px; }
+.e-done { background: #1f8a3b; border-color: #1f8a3b; color: #fff; }
+.e-tools { display: grid; grid-template-columns: repeat(4, 1fr); }
+.e-tools button { padding: 4px 2px !important; position: relative; }
+.e-tools button.has::after { content: '✓'; position: absolute; top: 2px; right: 6px; font-size: 12px; color: #5fd16a; }
+.e-tools button.has[aria-pressed='true']::after { color: #000; }
+.e-hint { justify-content: space-between; flex-wrap: wrap; }
+#e-hint { flex: 1 1 180px; font-size: 15px; color: #e6ece8; line-height: 1.25; }
+.e-acts { display: flex; gap: 6px; margin-left: auto; }
+.e-acts button[hidden] { display: none; }
+.e-ok { background: #1f8a3b; border-color: #1f8a3b; color: #fff; }
+.e-ok:disabled { opacity: .45; }
+@media (max-width: 400px) {
+  .e-title b { font-size: 24px; }
+  .e-par button { min-width: 42px; padding: 4px 6px !important; }
+  #editbar button { font-size: 15px; }
+}
+@media (orientation: landscape) and (min-width: 560px) {
+  body.editing #app { grid-template-areas: 'brand' 'pace' 'map'; grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
+  /* A panel down the right side, so the hole keeps the full height. */
+  #editbar { left: auto; top: 8px; bottom: calc(var(--safe-b) + 8px); width: clamp(280px, 32vw, 380px); align-content: start; overflow-y: auto; }
+  .e-tools { grid-template-columns: repeat(3, 1fr); }
+  .e-hole { flex-wrap: wrap; }
+  .e-hole .e-par { flex: 1 0 100%; margin-left: 0; }
+  .e-hole .e-par button { flex: 1; }
+  .e-hint { flex-direction: column; align-items: stretch; }
+  #e-hint { flex: none; }
+  .e-acts { flex-wrap: wrap; margin-left: 0; }
+  .e-acts button { flex: 1 1 auto; }
+  body.editing #tools { right: calc(clamp(280px, 32vw, 380px) + 18px); }
+  body.editing #nums { margin-right: calc(clamp(280px, 32vw, 380px) + 90px); }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  #editbar { gap: 4px; padding: 6px; }
+  #editbar button { min-height: 40px; font-size: 14px; }
+  .e-title b { font-size: 22px; }
+}
+@media (min-width: 768px) and (min-height: 600px) {
+  #editbar button { min-height: 58px; font-size: 18px; }
+  #e-hint { font-size: 17px; }
+}

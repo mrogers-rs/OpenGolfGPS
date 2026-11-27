@@ -93,6 +93,12 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 
 Course data © OpenStreetMap contributors (ODbL). Imagery © Esri and partners.
 
+## Mapping a course in the app
+
+When OpenStreetMap is missing tees, greens or hazards, open the course, then Menu → **Edit course map**. Per hole: set par, tap the tee, tap around the green and Finish, optionally tap dogleg aiming points, outline bunkers and water, tap single trees and outline woods. Edits sit on top of the OSM data (OSM itself is never changed) and are saved on the device.
+
+To build a course into the app for every device: Menu → **Export course file**, then save the file in `src/courses/` (any name ending `.json`). `src/courses/builtin.ts` lists the built-in courses (Westbrook Village Lakes and Vistas). A device's own edits win over the built-in file; **Discard my changes** goes back to it.
+
 ## Deploy (Cloudflare Pages)
 
 Connected to Git: build command `npm run build`, output directory `dist`. Every push to `main` deploys.
