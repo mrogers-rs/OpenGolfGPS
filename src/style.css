@@ -478,3 +478,33 @@ input[type='search'] { min-height: 52px; }
   #menu .word { font-size: 19px; }
   #coursename { font-size: 18px; }
 }
+
+/* ---------- Portrait v2: full-width yardages on top, hole selector bottom-right over the map, no legend ---------- */
+@media (orientation: portrait), (max-width: 559px) {
+  #app { grid-template-columns: 1fr; grid-template-areas: 'brand' 'pace' 'nums' 'map' 'tabs'; }
+  #nums { grid-template-columns: 1fr 1.3fr 1fr; gap: 8px; padding: 8px 10px 6px; }
+  #nums .num { padding: 4px 2px 6px; border-radius: 14px; }
+  #nums .num span { font-size: 12px; letter-spacing: .12em; }
+  .side b { font-size: 50px; } .mid b { font-size: 70px; }
+  #status { font-size: 12px; padding-top: 4px; }
+  #holecard {
+    grid-area: map; align-self: end; justify-self: end; margin: 0 10px 10px 0; z-index: 4;
+    padding: 2px; border: 1px solid var(--glass-line); border-radius: 18px;
+    background: var(--glass); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  #holecard .nav { width: 42px; font-size: 30px; }
+  #auto { margin: 2px 0 4px; }
+  /* No legend in portrait: the Clear button sits bottom-left, the map credit (i) top-left. */
+  #measure { left: 10px; right: auto; bottom: 10px; padding: 4px; }
+  #measure span { display: none !important; }
+  #greeninfo { left: 10px; right: 10px; bottom: auto; top: 10px; margin-right: 84px; }
+  .maplibregl-ctrl-bottom-right { top: 0; bottom: auto; left: 0; right: auto; }
+}
+@media (max-width: 360px) { .side b { font-size: 42px; } .mid b { font-size: 58px; } }
+@media (orientation: portrait) and (min-width: 700px) {
+  #nums { gap: 12px; padding: 10px 14px 8px; }
+  #nums .num span { font-size: 15px; }
+  .side b { font-size: 80px; } .mid b { font-size: 112px; }
+  #status { font-size: 14px; }
+  #holecard .nav { width: 58px; font-size: 40px; }
+}
