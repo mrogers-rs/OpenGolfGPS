@@ -2,7 +2,7 @@
 import * as turf from '@turf/turf';
 import { parseCourse } from './course.ts';
 import type { Course, LngLat, OverpassElement } from './types.ts';
-import { apiCourseHead, apiCourseFeatures } from './osmapi.ts';
+import { apiCourseHead, apiCourseFeatures, apiCoursesAt } from './osmapi.ts';
 
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -170,7 +170,9 @@ export async function race<T>(key: string, sources: Source<T>[], hedgeMs: number
 function friendly(errors: string[]): string {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return "You're offline. Courses you've opened before still work; new ones need a connection.";
   if (errors.some((e) => /not found|No holes/i.test(e))) return errors.find((e) => /not found|No holes/i.test(e))!;
-  return 'OpenStreetMap is busy right now. Wait a minute and try again.';
+  // The servers' own answers, kept short, so a problem report says what actually failed.
+  const why = [...new Set(errors)].join('; ').slice(0, 140);
+  return `OpenStreetMap is busy right now. Wait a minute and try again.${why ? ` (${why})` : ''}`;
 }
 
 export interface CourseHit {
@@ -208,6 +210,25 @@ async function coursesNearNominatim(p: LngLat, km: number, signal: AbortSignal):
     .filter((r) => r.type === 'golf_course' && (r.osm_type === 'way' || r.osm_type === 'relation') && r.name)
     .map((r) => ({ id: `${r.osm_type}/${r.osm_id}`, name: r.name, center: [+r.lon, +r.lat] as LngLat }))
     .sort((a, b) => turf.distance(p, a.center) - turf.distance(p, b.center));
+}
+
+/**
+ * The golf course at a known spot (for the built-in test course): asks Overpass, the main OSM API and
+ * Nominatim by position, so it doesn't depend on how the course is named. Courses whose name matches
+ * `name` come first, then the nearest.
+ */
+export async function courseAt(p: LngLat, name?: RegExp): Promise<CourseHit | undefined> {
+  const hits = await race('near', [
+    { name: 'overpass', run: (sig) => coursesNearOverpass(p, 1.5, sig).then(nonEmpty) },
+    { name: 'osm-api', run: (sig) => apiCoursesAt(p[0], p[1], sig).then(nonEmpty) },
+    { name: 'nominatim', run: (sig) => coursesNearNominatim(p, 2, sig).then(nonEmpty) },
+  ], 8000);
+  const score = (h: CourseHit) => (name && name.test(h.name) ? 0 : 1e6) + turf.distance(p, h.center);
+  return hits.sort((a, b) => score(a) - score(b))[0];
+}
+function nonEmpty<T>(a: T[]): T[] {
+  if (!a.length) throw new Error('Course not found in OpenStreetMap near that spot');
+  return a;
 }
 
 /** Search by name using Nominatim (OSM's geocoder). */

@@ -508,3 +508,14 @@ input[type='search'] { min-height: 52px; }
   #status { font-size: 14px; }
   #holecard .nav { width: 58px; font-size: 40px; }
 }
+
+/* ---------- Portrait: the map is stretched sideways a little (holes are long and thin) ---------- */
+/* Yardages are unaffected: MapLibre measures in its own (unstretched) pixels and corrects taps for CSS scale. */
+:root { --sx: 1; }
+@media (orientation: portrait), (max-width: 559px) { :root { --sx: 1.2; } }
+#map { right: auto; width: calc(100% / var(--sx)); transform: scaleX(var(--sx)); transform-origin: 0 0; }
+/* Labels, the crosshair and map controls are squeezed back so they keep their real shape. */
+.mk { pointer-events: none; }
+.mk > * { transform: scaleX(calc(1 / var(--sx))); }
+.mk > .crosshair { pointer-events: auto; }
+#map .maplibregl-ctrl { transform: scaleX(calc(1 / var(--sx))); transform-origin: 0 0; }
