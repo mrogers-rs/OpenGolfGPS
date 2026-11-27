@@ -299,15 +299,17 @@ function fitPadding() {
   const box = map.getContainer().getBoundingClientRect();
   const card = document.getElementById('holecard')?.getBoundingClientRect();
   const tools = document.getElementById('tools')?.getBoundingClientRect();
-  // In portrait the hole card sits above the map, so it only counts when it overlaps the map.
-  const cardBottom = card && card.height && card.bottom > box.top + 4 ? card.bottom - box.top : 0;
+  // The hole card counts at the top only when it floats over the top of the map (landscape).
+  const cardBottom = card && card.height && card.bottom > box.top + 4 && card.top < box.top + box.height / 2 ? card.bottom - box.top : 0;
+  // In portrait the hole card sits in the bottom-right corner of the map: keep the tee above it.
+  const cardLift = card && card.height && card.top > box.top + box.height / 2 ? box.bottom - card.top : 0;
   const toolsW = tools && tools.width ? box.right - tools.left : 76;
   // In landscape the yardage card floats at the top of the map: keep the hole below it.
   const nums = document.getElementById('nums')?.getBoundingClientRect();
   const numsBottom = nums && nums.height && nums.top < box.top + box.height / 2 ? nums.bottom - box.top : 0;
   return wide()
     ? { top: Math.max(96, cardBottom * 0.75, numsBottom + 16), bottom: 72, left: 56, right: toolsW + 24 }
-    : { top: Math.max(30, cardBottom + 28), bottom: 70, left: 40, right: toolsW + 10 };
+    : { top: Math.max(30, cardBottom + 28), bottom: Math.max(70, cardLift + 16), left: 40, right: toolsW + 10 };
 }
 
 /**
