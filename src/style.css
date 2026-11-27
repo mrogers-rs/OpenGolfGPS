@@ -254,3 +254,6 @@ button.danger { border-color: #8a2b2b; color: #ff8a8a; width: 100%; }
 button.danger:active { background: #3a1515; }
 button:disabled { opacity: .45; }
 .msg .retry { min-height: 40px; padding: 6px 14px; margin-left: 6px; color: var(--fg); border-color: var(--accent); }
+
+/* ---------- Hole cutout / approach view ---------- */
+.pinlbl { padding: 2px 10px; border-radius: 10px; background: #0f3d22; color: #fff; border: 2px solid #fff; font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; box-shadow: 0 3px 10px rgba(0,0,0,.4); pointer-events: none; }

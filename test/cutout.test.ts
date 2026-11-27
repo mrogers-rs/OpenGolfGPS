@@ -1,0 +1,43 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import * as turf from '@turf/turf';
+import { readFileSync } from 'node:fs';
+import { parseCourse } from '../src/course.ts';
+import { holeCorridor, holeMask, framing, insideCorridor, APPROACH_YD } from '../src/cutout.ts';
+import { yd } from '../src/yardage.ts';
+
+const fx = JSON.parse(readFileSync(new URL('./fixtures/allenmore.json', import.meta.url), 'utf8'));
+const course = parseCourse(fx.elements, { id: 'way/1', name: 'Allenmore' });
+
+test('the cutout keeps the hole (tee, line, green) and hides far-away points', () => {
+  for (const h of course.holes) {
+    const c = holeCorridor(h);
+    assert.ok(turf.booleanPointInPolygon(h.line[0], c), `tee of ${h.ref}`);
+    assert.ok(turf.booleanPointInPolygon(h.center, c), `green of ${h.ref}`);
+    const far = turf.destination(h.center, 300, turf.bearing(h.line[0], h.center) + 90, { units: 'meters' });
+    assert.ok(!turf.booleanPointInPolygon(far, c));
+    const mask = holeMask(c);
+    assert.ok(turf.booleanPointInPolygon(far, mask) && !turf.booleanPointInPolygon(h.center, mask));
+  }
+  const h = course.holes[0];
+  const trees = [turf.point(h.center), turf.point(turf.destination(h.center, 500, 0, { units: 'meters' }).geometry.coordinates)];
+  assert.equal(insideCorridor(trees, holeCorridor(h)).length, 1);
+});
+
+test('the view frames less of the hole as you walk, then the green close up', () => {
+  const h = course.holes.find((x) => x.par === 4)!;
+  const span = (pts: [number, number][]) => turf.length(turf.lineString(turf.coordAll(turf.envelope(turf.multiPoint(pts))).slice(0, 3) as any), { units: 'meters' });
+  const tee = framing(h, null);
+  assert.equal(tee.mode, 'hole');
+  const line = turf.lineString([...h.line.slice(0, -1), h.center]);
+  const total = turf.length(line, { units: 'meters' });
+  const mid = turf.along(line, total * 0.4, { units: 'meters' }).geometry.coordinates as [number, number];
+  const ahead = framing(h, mid);
+  assert.equal(ahead.mode, 'ahead');
+  assert.ok(span(ahead.pts) < span(tee.pts));
+  const near = turf.along(line, total - 60, { units: 'meters' }).geometry.coordinates as [number, number];
+  assert.ok(yd(near, h.center) <= APPROACH_YD);
+  const ap = framing(h, near);
+  assert.equal(ap.mode, 'approach');
+  assert.ok(span(ap.pts) < span(ahead.pts));
+});

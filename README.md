@@ -66,6 +66,11 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
   (portrait) and left to right when wider (landscape), and zoomed so tee to green fills the screen around the
   overlays (`fitPoints` in `src/main.ts`; turning the device re-fits). Landscape uses a gentler 3D tilt and a
   narrower yardage column; phones on their side get a compact header, numbers and a one-row tab bar.
+- **Hole cutout and zoom as you play** (`src/cutout.ts`): everything outside the current hole (line of play
+  ±42 m, green ±20 m) is darkened, and raised trees are limited to the hole (Menu → "Cut out the hole" turns it off).
+  Landscape runs the hole from the bottom-left to the top-right corner. With GPS on the hole, the view frames only
+  what's left (you → green) and re-frames every ~10 yd as you walk; inside 100 yd it becomes a flat close-up of the
+  green with a line to the pin and its yardage. Panning or zooming by hand pauses this until Recenter or the next hole.
 - **Loading bar**: opening or refreshing a course shows a progress bar through each stage (find the course,
   download, build holes, save, build 3D scenery). Overpass sends no size, so the download stage eases toward
   its end by bytes received. Offline map downloads use the same bar.

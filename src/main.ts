@@ -6,6 +6,7 @@ import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { scenery3d } from './scenery3d.ts';
+import { holeCorridor, holeMask, insideCorridor, framing, APPROACH_YD } from './cutout.ts';
 import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
@@ -54,6 +55,8 @@ const map = new maplibregl.Map({
       measure: { type: 'geojson', data: turf.featureCollection([]) },
       shots: { type: 'geojson', data: turf.featureCollection([]) },
       scenery3d: { type: 'geojson', data: turf.featureCollection([]) },
+      cutout: { type: 'geojson', data: turf.featureCollection([]) },
+      pinline: { type: 'geojson', data: turf.featureCollection([]) },
     },
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
@@ -82,10 +85,14 @@ const map = new maplibregl.Map({
       { id: 'tree', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#2e7432', 'circle-stroke-color': '#1d5221', 'circle-stroke-width': 1, 'circle-radius': TREE_R } },
       { id: 'trees3d', type: 'fill-extrusion', source: 'scenery3d', layout: { visibility: 'none' }, paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.97, 'fill-extrusion-vertical-gradient': true } },
       line('green-line', 'green', '#fff', 1.5),
+      // Hole cutout: everything outside the hole and its margin is darkened (raised trees are filtered to the hole instead); above other holes' green outlines.
+      { id: 'cutout', type: 'fill', source: 'cutout', layout: { visibility: 'none' }, paint: { 'fill-color': '#040805', 'fill-opacity': 0.9 } },
+      { id: 'cutout-edge', type: 'line', source: 'cutout', layout: { visibility: 'none', 'line-join': 'round' }, paint: { 'line-color': '#a8d8ae', 'line-opacity': 0.45, 'line-width': 1.5, 'line-blur': 0.5 } },
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
       { id: 'hole-line', type: 'line', source: 'hole', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 2] } },
       { id: 'shot-line', type: 'line', source: 'shots', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ff7a1a', 'line-width': 2.5 } },
       { id: 'shot-pt', type: 'circle', source: 'shots', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#ff7a1a', 'circle-stroke-color': '#000', 'circle-stroke-width': 1.5 } },
+      { id: 'pinline', type: 'line', source: 'pinline', layout: { 'line-cap': 'round' }, paint: { 'line-color': '#fff', 'line-width': 2.5, 'line-opacity': 0.95 } },
       { id: 'measure-line', type: 'line', source: 'measure', paint: { 'line-color': '#ffd400', 'line-width': 3 } },
     ],
   },
@@ -110,6 +117,7 @@ const targetMarker = new maplibregl.Marker({ element: el('dot-target'), draggabl
 const flagMarker = new maplibregl.Marker({ element: el('flag', '⛳'), anchor: 'bottom-left', offset: [-4, 0] });
 const frontMarker = new maplibregl.Marker({ element: el('edge') });
 const backMarker = new maplibregl.Marker({ element: el('edge') });
+const pinLabel = new maplibregl.Marker({ element: el('pinlbl') });
 
 /** A reusable set of HTML label markers (hazards, layups). */
 function markerPool(cls: string) {
@@ -172,7 +180,7 @@ function setCourse(c: Course, keepHole = false) {
   if (!keepHole || fresh || state.hole >= c.holes.length) state.hole = 0;
   store.saveState(state);
   (map.getSource('course') as GeoJSONSource).setData(c.features);
-  (map.getSource('scenery3d') as GeoJSONSource).setData(scenery3d(c));
+  sceneryAll = scenery3d(c);
   target = null;
   if (player) {
     const at = holeAtStart(c.holes, player);
@@ -180,6 +188,17 @@ function setCourse(c: Course, keepHole = false) {
   }
   showHole(true);
   upgradeCourse(c);
+}
+
+/** All raised trees for the course; the hole cutout shows only the ones on the current hole. */
+let sceneryAll: GeoJSON.FeatureCollection = turf.featureCollection([]);
+
+/** Darkens everything but the current hole (when the cutout is on) and keeps raised trees to the hole. */
+function updateCutout(h: Hole) {
+  const on = state.cutout !== false;
+  const corridor = holeCorridor(h);
+  (map.getSource('cutout') as GeoJSONSource).setData(on ? holeMask(corridor) : turf.featureCollection([]));
+  (map.getSource('scenery3d') as GeoJSONSource).setData(on ? turf.featureCollection(insideCorridor(sceneryAll.features, corridor)) : sceneryAll);
 }
 
 /** Courses saved by an older version lack scenery: quietly re-fetch them when online. */
@@ -194,7 +213,7 @@ function upgradeCourse(c: Course) {
       if (course?.id !== fresh.id) return;
       course = fresh;
       (map.getSource('course') as GeoJSONSource).setData(fresh.features);
-      (map.getSource('scenery3d') as GeoJSONSource).setData(scenery3d(fresh));
+      sceneryAll = scenery3d(fresh);
       showHole(false);
     })
     .catch(() => { /* try again next time */ })
@@ -225,22 +244,29 @@ function showHole(fit: boolean) {
   $('holemeta').innerHTML = [h.par && `<b>Par ${h.par}</b>`, `${len} yds`, h.handicap && `HCP ${h.handicap}`].filter(Boolean).join('<i>·</i>');
   (map.getSource('hole') as GeoJSONSource).setData(turf.lineString(h.line));
   flagMarker.setLngLat(pinOf(h) ?? h.pin ?? h.center).addTo(map);
+  updateCutout(h);
   if (map.getLayer('trees3d')) applyView();
-  if (fit) greenView ? fitGreen(h) : fitHole(h);
+  if (fit) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); }
   render();
 }
 
-/** Tee at the bottom, green at the top. Includes you if you're on this hole. */
 /** True when the map is wider than tall: holes then run left to right instead of bottom to top. */
 function wide() {
   const { clientWidth: w, clientHeight: h } = map.getContainer();
   return w > h * 1.05;
 }
 
-/** Map bearing that puts `from -> to` pointing up the screen (portrait) or to the right (landscape). */
+/**
+ * Map bearing that puts `from -> to` pointing up the screen (portrait), or from the bottom-left corner
+ * toward the top-right corner of the open map area (landscape).
+ */
 function playBearing(from: LngLat, to: LngLat) {
   const b = turf.bearing(from, to);
-  return wide() ? b - 90 : b;
+  if (!wide()) return b;
+  const { clientWidth: w, clientHeight: h } = map.getContainer();
+  const pad = fitPadding();
+  const up = (Math.atan2(h - pad.top - pad.bottom, w - pad.left - pad.right) * 180) / Math.PI; // diagonal, degrees above horizontal
+  return b - (90 - up);
 }
 
 /** Room the overlays (hole card, tool buttons, shot bar) leave for the hole. */
@@ -248,16 +274,39 @@ function fitPadding() {
   return wide() ? { top: 118, bottom: 56, left: 24, right: 76 } : { top: 124, bottom: 52, left: 24, right: 72 };
 }
 
-/** Hole view: tee to green filling the screen, running up (portrait) or across (landscape). */
+/**
+ * Hole view. With no usable position: the whole hole, tee to green. On the hole: just what's left, from you
+ * to the green, so it zooms in as you walk. Near the green: a close-up of the green, faced from where you are.
+ * `animate` glides there (used while following you) instead of jumping.
+ */
 const TILT = 50;
 const TILT_WIDE = 32;
-function fitHole(h: Hole) {
-  const pts: LngLat[] = [...h.line, ...(h.green ?? [])];
-  if (player && turf.distance(player, h.center, { units: 'meters' }) < 640) pts.push(player);
-  const bearing = playBearing(h.line[0], h.center);
-  const pitch = state.view === '3d' && !greenView ? (wide() ? TILT_WIDE : TILT) : 0;
-  fitPoints(pts, bearing, pitch, fitPadding(), 19);
+let lastFitFrom: LngLat | null = null;
+/** You panned or zoomed by hand: stop following until the next hole or Recenter. */
+let userMoved = false;
+function fitHole(h: Hole, animate = false) {
+  const f = framing(h, usablePlayer(h));
+  const bearing = playBearing(f.from, h.center);
+  const pitch = state.view === '3d' && !greenView && f.mode !== 'approach' ? (wide() ? TILT_WIDE : TILT) : 0;
+  const before = animate ? { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() } : null;
+  fitPoints(f.pts, bearing, pitch, fitPadding(), f.mode === 'approach' ? 20.5 : 19);
+  lastFitFrom = player;
+  if (before) {
+    const after = { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+    map.jumpTo(before);
+    map.easeTo({ ...after, duration: 900 });
+  }
 }
+
+/** Re-frames the hole as you walk (every ~10 yd), unless you've moved the map yourself. */
+function follow() {
+  const h = hole();
+  if (!h || !player || greenView || flying || target || userMoved) return;
+  if (lastFitFrom && yd(lastFitFrom, player) < 10) return;
+  fitHole(h, true);
+}
+map.on('dragstart', () => { userMoved = true; });
+map.on('zoomstart', (e) => { if ((e as any).originalEvent) userMoved = true; });
 
 /**
  * Rotates to `bearing`, tilts to `pitch`, then zooms and pans until the points just fill the padded screen.
@@ -357,6 +406,7 @@ function render() {
     gps.className = accuracy <= 10 ? 'good' : 'poor';
   }
 
+  renderPinLine(h, me, pin);
   renderHazards(h, me);
   renderGreenInfo(h, n.frontPt, n.backPt);
   renderShots(h);
@@ -374,6 +424,20 @@ function render() {
     targetMarker.remove();
     (map.getSource('measure') as GeoJSONSource | undefined)?.setData(turf.featureCollection([]));
   }
+}
+
+/** Near the green: a line from you to the pin with the yardage on it. */
+function renderPinLine(h: Hole, me: LngLat | null, pin: LngLat | null | undefined) {
+  const to = pin ?? h.center;
+  const near = me && !greenView && yd(me, h.center) <= APPROACH_YD;
+  (map.getSource('pinline') as GeoJSONSource | undefined)?.setData(near ? turf.lineString([me!, to]) : turf.featureCollection([]));
+  map.setLayoutProperty('hole-line', 'visibility', near ? 'none' : 'visible');
+  if (!near) { pinLabel.remove(); return; }
+  const d = yd(me!, to);
+  // Just short of the pin, so it sits on the green close-up.
+  const back = Math.min(d * 0.9144 * 0.45, 22);
+  pinLabel.getElement().textContent = fmt(d);
+  pinLabel.setLngLat(turf.destination(to, back, turf.bearing(to, me!), { units: 'meters' }).geometry.coordinates as LngLat).addTo(map);
 }
 
 function usablePlayer(h: Hole): LngLat | null {
@@ -503,6 +567,7 @@ function onPosition(p: LngLat, acc: number) {
     }
   }
   render();
+  follow();
 }
 
 function startGps() {
@@ -539,7 +604,7 @@ window.addEventListener('resize', () => {
 // ---------- Controls ----------
 $('prev').onclick = () => goHole(state.hole - 1, true);
 $('next').onclick = () => goHole(state.hole + 1, true);
-$('recenter').onclick = () => { const h = hole(); if (h) fitHole(h); };
+$('recenter').onclick = () => { const h = hole(); if (h) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); } };
 $('m-clear').onclick = () => { target = null; render(); };
 $('greenview').onclick = () => { const h = hole(); if (!h) return; greenView = !greenView; target = null; showHole(true); };
 $('fly').onclick = () => { if (flying) flying = false; else flyover(); };
@@ -796,11 +861,22 @@ function applyView() {
   map.setPaintProperty('cartpath', 'line-opacity', on ? 0.6 : 1);
   // In 3D the trees stand up; their flat shadows stay on the ground.
   map.setLayoutProperty('trees3d', 'visibility', is3d ? 'visible' : 'none');
+  const cut = state.cutout !== false;
+  for (const k of ['cutout', 'cutout-edge']) map.setLayoutProperty(k, 'visibility', cut ? 'visible' : 'none');
+  map.setLayoutProperty('holes', 'visibility', cut ? 'none' : 'visible');
+  $<HTMLInputElement>('cutout').checked = cut;
   for (const k of ['tree', 'treerow']) map.setLayoutProperty(k, 'visibility', !on && !is3d ? 'visible' : 'none');
   // The button shows the view you're in; tapping moves to the next.
   $('viewtoggle').textContent = state.view === '3d' ? '3D' : on ? 'Sat' : '2D';
   $<HTMLInputElement>('sat').checked = on;
 }
+$<HTMLInputElement>('cutout').onchange = (e) => {
+  state.cutout = (e.target as HTMLInputElement).checked;
+  store.saveState(state);
+  const h = hole();
+  if (h) updateCutout(h);
+  applyView();
+};
 $<HTMLInputElement>('hazards').onchange = (e) => { state.hazards = (e.target as HTMLInputElement).checked; store.saveState(state); render(); };
 $<HTMLSelectElement>('pace-target').onchange = (e) => {
   state.paceTarget = Number((e.target as HTMLSelectElement).value);
