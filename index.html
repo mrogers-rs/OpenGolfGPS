@@ -7,14 +7,18 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
-    <meta name="apple-mobile-web-app-title" content="Golf GPS" />
+    <meta name="apple-mobile-web-app-title" content="OpenGolfGPS" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
     <link rel="icon" href="/icons/icon-192.png" />
-    <title>Golf GPS</title>
+    <title>OpenGolfGPS</title>
   </head>
   <body>
     <div id="app">
+      <div id="brand">
+        <span class="mark"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="#1f8a3b"/><ellipse cx="16" cy="24" rx="9" ry="3" fill="#7be07f"/><path d="M14 24V7" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M15 7.5l9 3.2-9 3.3z" fill="#ffd400"/></svg><span class="word">Open<b>Golf</b>GPS</span></span>
+        <button id="coursename" aria-label="Change course">Pick a course</button>
+      </div>
       <header id="bar">
         <button id="prev" class="nav" aria-label="Previous hole">‹</button>
         <button id="holeinfo" aria-label="Pick hole">
@@ -36,6 +40,7 @@
         </div>
         <div id="tools">
           <button id="recenter" class="pill" aria-label="Show whole hole">⤢</button>
+          <button id="viewtoggle" class="pill" aria-label="Switch between satellite and map view">Map</button>
           <button id="greenview" class="pill" aria-pressed="false" aria-label="Green view">Green</button>
           <button id="fly" class="pill" aria-label="Fly over the hole">Fly</button>
         </div>

@@ -47,7 +47,7 @@ const map = new maplibregl.Map({
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
       { id: 'sat', type: 'raster', source: 'sat', layout: { visibility: state.satellite ? 'visible' : 'none' } },
-      fill('fairway', '#3c9a3f'),
+      fill('fairway', '#4caf50'),
       fill('tee', '#58b85c'),
       fill('green', '#7be07f'),
       fill('bunker', '#e9dca6'),
@@ -134,6 +134,7 @@ map.on('click', (e) => {
 // ---------- Course ----------
 function setCourse(c: Course, keepHole = false) {
   course = c;
+  $('coursename').textContent = c.name;
   round = resumeRound(c);
   state.courseId = c.id;
   const fresh = Date.now() - state.holeSetAt > ROUND_RESET_MS;
@@ -485,6 +486,7 @@ $('holeinfo').onclick = () => {
 const sheet = $<HTMLDialogElement>('sheet');
 const msg = (t: string) => ($('msg').textContent = t);
 $('menu').onclick = openSheet;
+$('coursename').onclick = openSheet;
 
 function openSheet() {
   renderSaved();
@@ -588,12 +590,26 @@ $('dl-tiles').onclick = async () => {
   }
 };
 
-$<HTMLInputElement>('sat').onchange = (e) => {
-  state.satellite = (e.target as HTMLInputElement).checked;
+$<HTMLInputElement>('sat').onchange = (e) => setSatellite((e.target as HTMLInputElement).checked);
+$('viewtoggle').onclick = () => setSatellite(!state.satellite);
+
+/** Satellite photo with light course outlines, or a drawn course map (works with no imagery at all). */
+function setSatellite(on: boolean) {
+  state.satellite = on;
   store.saveState(state);
-  map.setLayoutProperty('sat', 'visibility', state.satellite ? 'visible' : 'none');
-  for (const k of ['fairway', 'tee', 'green', 'bunker', 'water']) map.setPaintProperty(k, 'fill-opacity', state.satellite ? 0.18 : 0.85);
-};
+  applyView();
+}
+function applyView() {
+  const on = state.satellite;
+  map.setLayoutProperty('sat', 'visibility', on ? 'visible' : 'none');
+  map.setPaintProperty('bg', 'background-color', on ? '#0d2a14' : '#2e6b34'); // rough
+  for (const k of ['fairway', 'tee', 'green', 'bunker', 'water']) map.setPaintProperty(k, 'fill-opacity', on ? 0.18 : 0.95);
+  map.setPaintProperty('cartpath', 'line-opacity', on ? 0.6 : 0.9);
+  map.setPaintProperty('cartpath', 'line-color', on ? '#999' : '#c9c2b0');
+  // The button names the view you'd switch to.
+  $('viewtoggle').textContent = on ? 'Map' : 'Sat';
+  $<HTMLInputElement>('sat').checked = on;
+}
 $<HTMLInputElement>('hazards').onchange = (e) => { state.hazards = (e.target as HTMLInputElement).checked; store.saveState(state); render(); };
 $<HTMLSelectElement>('pace-target').onchange = (e) => {
   state.paceTarget = Number((e.target as HTMLSelectElement).value);
@@ -614,6 +630,7 @@ function esc(s: string) {
 
 // ---------- Start ----------
 map.on('load', () => {
+  applyView();
   // Start with the attribution collapsed to its (i) button so it doesn't cover the shot bar.
   const attrib = document.querySelector('.maplibregl-ctrl-attrib');
   attrib?.classList.remove('maplibregl-compact-show');
