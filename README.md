@@ -8,7 +8,7 @@ Vanilla TypeScript + Vite, MapLibre GL, turf.js. Works offline once a course is 
 ```sh
 npm install
 npm run dev        # http://localhost:5173 (use --host URL on your phone, same wifi)
-npm test           # core yardage / parsing / auto-advance tests against Allenmore data
+npm test           # yardage, hazards, layups, scorecard and pace tests against Allenmore data
 npm run build      # static site in dist/
 ```
 
@@ -32,6 +32,22 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 - **Auto-advance** (`src/advance.ts`): moves to the next hole when you're within 35 yd of its tee and off
   the current green. Prev/next or tapping the hole number overrides; auto carries on from whatever hole
   you picked. The AUTO button turns it off.
+- **Hazards and layups** (`src/hazards.ts`): bunkers and water within 35 yd of your line of play (you → rest
+  of the hole → green center), plus anything within 12 yd of the green, get a label with two numbers: to
+  reach (near edge) over to carry (far edge). Hazards you've passed drop off. White layup markers on the line
+  show spots 100/150/200/250 yd from the green, with your distance to each underneath. Toggle in the menu.
+- **Green view**: close-up of the green turned to your approach, with its depth. Tap the green to set today's
+  pin; the big number then reads PIN, and green view shows how far on and how far from the back it is.
+- **Flyover**: animated tilt-and-fly from the tee along the line of play to the green. Touch the map to stop.
+- **Shot tracker**: "Mark shot" saves your position; while you walk to the ball it shows the live distance of
+  that shot. Shots are drawn in orange and listed on the scorecard.
+- **Scorecard and stats** (`src/round.ts`, `src/card.ts`): one-tap score, putts, fairway, penalties and
+  bunker entry. Out/In/Total, then fairways, greens in regulation, putts, scrambling, sand saves, penalties,
+  birdie/par/bogey counts and scoring average by par. Past rounds are kept, with combined stats once there
+  are two or more 9+ hole rounds. Everything is stored on the phone.
+- **Pace of play**: the round clock starts when GPS first puts you on a tee (or when you first score, mark
+  a shot or set a pin). Each hole gets a share of the target (default 4:15 for 18, weighted 11/14/17 for
+  par 3/4/5), and the status line shows minutes ahead or behind. Target is in the menu.
 - **Offline** (`public/sw.js`): app shell precached on first visit; satellite tiles cached as viewed, and
   "Download map for offline" prefetches the course area (zoom 14–19).
 - **Wake lock**: Screen Wake Lock API, re-acquired when you return to the app.
