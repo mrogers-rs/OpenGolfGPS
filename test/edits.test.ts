@@ -83,3 +83,16 @@ test('editor offers holes 1-18 even when OSM has one', () => {
   const one = { ...base, holes: base.holes.slice(0, 1) };
   assert.deepEqual(editableRefs(one, null), Array.from({ length: 18 }, (_, i) => i + 1));
 });
+
+test('marked trees and woods become scenery (and 3D), not hazards', async () => {
+  const { scenery3d } = await import('../src/scenery3d.ts');
+  const h1 = base.holes[0];
+  const mid = turf.along(turf.lineString(h1.line), 200, { units: 'meters' }).geometry.coordinates as LngLat;
+  const e: CourseEdits = { ...emptyEdits(base.id, base.name), hazards: [{ id: 'w', kind: 'wood', ring: closeRing(blob(mid, 15)) }], trees: [{ id: 't', at: mid }] };
+  const c = applyEdits(base, e);
+  assert.equal(c.features.features.filter((f) => f.properties?.kind === 'tree').length, 1);
+  assert.equal(c.features.features.filter((f) => f.properties?.kind === 'wood').length, 1);
+  assert.equal(hazardNumbers(c, h1, null).length, 0);
+  assert.equal(scenery3d(c).features.length, 4); // trunk + 2 crown tiers + woods
+  assert.deepEqual(parseEditsFile(JSON.stringify(e)), e);
+});

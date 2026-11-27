@@ -38,7 +38,7 @@ let lastFixAt = 0;
 let round: Round | null = null;
 let greenView = false;
 /** Course editor state (see Course editor below); null when not editing. */
-type Tool = 'tee' | 'green' | 'dogleg' | 'bunker' | 'water';
+type Tool = 'tee' | 'green' | 'dogleg' | 'bunker' | 'water' | 'tree' | 'woods';
 let editing: { ref: number; tool: Tool | null; pts: LngLat[]; sel: string | null } | null = null;
 /** A round older than this (since its start) isn't resumed. */
 const ROUND_MAX_MS = 14 * 3600 * 1000;
@@ -105,9 +105,9 @@ const map = new maplibregl.Map({
       { id: 'measure-casing', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.55 } },
       { id: 'measure-line', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['match', ['get', 'leg'], 'to', '#ffd400', '#ffffff'], 'line-width': 5 } },
       // Course editor: shapes you've marked (outlined) and the one you're drawing.
-      { id: 'edit-fill', type: 'fill', source: 'edit', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['match', ['get', 'kind'], 'green', '#8eef80', 'bunker', '#efe1a8', 'water', '#3a8de4', '#fff'], 'fill-opacity': ['case', ['get', 'drawing'], 0.45, 0.3] } },
-      { id: 'edit-line', type: 'line', source: 'edit', filter: ['!=', ['geometry-type'], 'Point'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['case', ['get', 'sel'], '#ff3b30', ['get', 'drawing'], '#ffd400', ['match', ['get', 'kind'], 'green', '#b6ffad', 'bunker', '#fff3c4', 'water', '#9cc9ff', 'line', '#ffffff', '#fff']], 'line-width': ['case', ['any', ['get', 'sel'], ['get', 'drawing']], 3.5, 2.5] } },
-      { id: 'edit-pts', type: 'circle', source: 'edit', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 6], 'circle-color': ['match', ['get', 'kind'], 'tee', '#2f7bff', 'dogleg', '#ffd400', '#ffd400'], 'circle-stroke-color': '#000', 'circle-stroke-width': 2 } },
+      { id: 'edit-fill', type: 'fill', source: 'edit', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['match', ['get', 'kind'], 'green', '#8eef80', 'bunker', '#efe1a8', 'water', '#3a8de4', 'wood', '#2e7432', '#fff'], 'fill-opacity': ['case', ['==', ['get', 'drawing'], true], 0.45, 0.3] } },
+      { id: 'edit-line', type: 'line', source: 'edit', filter: ['!=', ['geometry-type'], 'Point'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['case', ['==', ['get', 'sel'], true], '#ff3b30', ['==', ['get', 'drawing'], true], '#ffd400', ['match', ['get', 'kind'], 'green', '#b6ffad', 'bunker', '#fff3c4', 'water', '#9cc9ff', 'wood', '#7be07f', 'line', '#ffffff', '#fff']], 'line-width': ['case', ['any', ['==', ['get', 'sel'], true], ['==', ['get', 'drawing'], true]], 3.5, 2.5] } },
+      { id: 'edit-pts', type: 'circle', source: 'edit', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 16, ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 'tree', 4, 6], 20, ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 'tree', 40, 6]], 'circle-color': ['match', ['get', 'kind'], 'tee', '#2f7bff', 'dogleg', '#ffd400', 'tree', '#2e7432', '#ffd400'], 'circle-opacity': ['match', ['get', 'kind'], 'tree', 0.75, 1], 'circle-stroke-color': ['case', ['==', ['get', 'sel'], true], '#ff3b30', ['==', ['get', 'kind'], 'tree'], '#b6ffad', '#000'], 'circle-stroke-width': ['case', ['==', ['get', 'sel'], true], 3, 2] } },
     ],
   },
   center: TEST_COURSE.center,
@@ -762,13 +762,17 @@ $('holeinfo').onclick = () => {
 // device (over the OSM data, which is never changed), and can be exported as a course file to build in.
 
 const HINTS: Record<Tool | 'none', string> = {
-  none: 'Pick what to mark. Tap a hazard you drew to delete it.',
+  none: 'Pick what to mark. Tap something you drew to delete it.',
   tee: 'Tap where you tee off. Tap again to move it.',
   green: 'Tap around the edge of the green, then Finish.',
   dogleg: 'Tap the aiming point at the corner (up to 2). Clear for a straight hole.',
   bunker: 'Tap around the edge of the bunker, then Finish.',
   water: 'Tap around the edge of the water, then Finish.',
+  tree: 'Tap each tree.',
+  woods: 'Tap around the edge of the trees, then Finish.',
 };
+/** Tools that draw an outline (tap around the edge, then Finish), and the shape each one makes. */
+const OUTLINE: Partial<Record<Tool, 'green' | 'bunker' | 'water' | 'wood'>> = { green: 'green', bunker: 'bunker', water: 'water', woods: 'wood' };
 
 /** Your edits for the open course, starting from the built-in course file if there is one. */
 function myEdits(): CourseEdits {
@@ -858,21 +862,27 @@ function editTap(p: LngLat, pt: maplibregl.Point) {
   p = roundPt(p);
   const { tool, ref } = editing;
   if (!tool) {
-    // Select a hazard you drew (to delete it).
-    const hit = map.queryRenderedFeatures([[pt.x - 8, pt.y - 8], [pt.x + 8, pt.y + 8]], { layers: ['bunker', 'water'] }).find((f) => f.properties?.hid);
+    // Select a hazard, tree or woods you drew (to delete it).
+    const hit = map.queryRenderedFeatures([[pt.x - 10, pt.y - 10], [pt.x + 10, pt.y + 10]], { layers: ['edit-pts', 'edit-fill'] }).find((f) => f.properties?.hid);
     editing.sel = (hit?.properties?.hid as string) ?? null;
     return drawEdit();
   }
-  if (tool === 'green' || tool === 'bunker' || tool === 'water') {
+  if (OUTLINE[tool]) {
     editing.pts.push(p);
     return drawEdit();
   }
   const e = myEdits();
+  if (tool === 'tree') {
+    (e.trees ??= []).push({ id: newId(), at: p });
+    return commit(e);
+  }
   const h = (e.holes[String(ref)] ??= {});
   if (tool === 'tee') h.tee = p;
   if (tool === 'dogleg') h.dogleg = [...(h.dogleg ?? []).slice(-1), p];
   commit(e);
 }
+
+const newId = () => Math.random().toString(36).slice(2, 10);
 
 function editFinish() {
   if (!editing?.tool || editing.pts.length < 3) return;
@@ -882,7 +892,7 @@ function editFinish() {
     (e.holes[String(editing.ref)] ??= {}).green = ring;
     editing.tool = null; // one green per hole
   } else {
-    e.hazards.push({ id: Math.random().toString(36).slice(2, 10), kind: editing.tool as 'bunker' | 'water', ring });
+    e.hazards.push({ id: newId(), kind: OUTLINE[editing.tool] as 'bunker' | 'water' | 'wood', ring });
   }
   editing.pts = [];
   commit(e);
@@ -894,6 +904,7 @@ function editClear() {
   const e = myEdits();
   if (editing.sel) {
     e.hazards = e.hazards.filter((z) => z.id !== editing!.sel);
+    e.trees = e.trees?.filter((t) => t.id !== editing!.sel);
     editing.sel = null;
     return commit(e);
   }
@@ -926,9 +937,12 @@ function drawEdit() {
   else if (e?.green && e.green.length >= 4) fs.push(turf.polygon([e.green], { kind: 'green' }));
   for (const d of h ? h.line.slice(1, -1) : e?.dogleg ?? []) fs.push(turf.point(d, { kind: 'dogleg' }));
   if (tee) fs.push(turf.point(tee, { kind: 'tee' }));
-  for (const z of editsFor(course.id)?.hazards ?? []) if (z.ring.length >= 4) fs.push(turf.polygon([z.ring], { kind: z.kind, sel: z.id === sel }));
-  if (pts.length >= 3) fs.push(turf.polygon([closeRing(pts)], { kind: tool, drawing: true }));
-  else if (pts.length === 2) fs.push(turf.lineString(pts, { kind: tool, drawing: true }));
+  const all = editsFor(course.id);
+  for (const z of all?.hazards ?? []) if (z.ring.length >= 4) fs.push(turf.polygon([z.ring], { kind: z.kind, sel: z.id === sel, hid: z.id }));
+  for (const t of all?.trees ?? []) fs.push(turf.point(t.at, { kind: 'tree', sel: t.id === sel, hid: t.id }));
+  const shape = tool ? OUTLINE[tool] : undefined;
+  if (pts.length >= 3) fs.push(turf.polygon([closeRing(pts)], { kind: shape, drawing: true }));
+  else if (pts.length === 2) fs.push(turf.lineString(pts, { kind: shape, drawing: true }));
   for (const q of pts) fs.push(turf.point(q, { kind: 'vertex' }));
   (map.getSource('edit') as GeoJSONSource).setData(turf.featureCollection(fs));
 
@@ -940,16 +954,16 @@ function drawEdit() {
     const t = b.dataset.tool;
     b.classList.toggle('has', (t === 'tee' && !!tee) || (t === 'green' && !!(h?.green || e?.green)) || (t === 'dogleg' && !!h && h.line.length > 2));
   });
-  const drawing = tool === 'green' || tool === 'bunker' || tool === 'water';
+  const drawing = !!(tool && OUTLINE[tool]);
   const missing = [!tee && 'tee', !(h?.green || e?.green) && 'green', !par && 'par'].filter(Boolean).join(', ');
-  let hint = sel ? 'Hazard selected. Clear deletes it.' : HINTS[tool ?? 'none'];
+  let hint = sel ? 'Selected. Delete removes it.' : HINTS[tool ?? 'none'];
   if (drawing && pts.length) hint = `${pts.length} point${pts.length > 1 ? 's' : ''}. ${pts.length < 3 ? 'Keep tapping around the edge.' : 'Finish when you’re back at the start.'}`;
   if (!tool && !sel && missing) hint = `Hole ${ref} still needs: ${missing}.`;
   $('e-hint').textContent = hint;
   $<HTMLButtonElement>('e-undo').hidden = !(drawing && pts.length);
   $<HTMLButtonElement>('e-finish').hidden = !drawing;
   $<HTMLButtonElement>('e-finish').disabled = pts.length < 3;
-  $<HTMLButtonElement>('e-clear').hidden = !(pts.length || sel || (tool && tool !== 'bunker' && tool !== 'water'));
+  $<HTMLButtonElement>('e-clear').hidden = !(pts.length || sel || tool === 'tee' || tool === 'green' || tool === 'dogleg');
   $('e-clear').textContent = sel ? 'Delete' : pts.length ? 'Start over' : 'Clear';
 }
 
