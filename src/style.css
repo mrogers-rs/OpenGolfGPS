@@ -230,3 +230,13 @@ select { font: inherit; padding: 8px; border-radius: 10px; background: #000; col
   #auto { min-height: 24px; font-size: 11px; }
   #measure { top: 112px; }
 }
+
+/* ---------- Course loading bar and reset ---------- */
+.loadbar { margin: 4px 0 12px; }
+.loadbar .track { height: 12px; border-radius: 6px; background: #2a2a2a; overflow: hidden; border: 1px solid #3a3a3a; }
+.loadbar .track i { display: block; height: 100%; width: 0; border-radius: 6px; background: linear-gradient(90deg, #2f9e44, #8ce99a); transition: width .25s ease-out; }
+.loadbar .lbl { letter-spacing: normal; text-transform: none; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 14px; color: var(--muted); }
+.loadbar .lbl b { color: var(--fg); font-variant-numeric: tabular-nums; }
+button.danger { border-color: #8a2b2b; color: #ff8a8a; width: 100%; }
+button.danger:active { background: #3a1515; }
+button:disabled { opacity: .45; }

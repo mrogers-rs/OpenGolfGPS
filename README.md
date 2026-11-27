@@ -57,6 +57,11 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
   are re-fetched quietly the next time they're opened online (`COURSE_DATA_VERSION` in `src/course.ts`).
 - **Offline** (`public/sw.js`): app shell precached on first visit; satellite tiles cached as viewed, and
   "Download map for offline" prefetches the course area (zoom 14–19).
+- **Loading bar**: opening or refreshing a course shows a progress bar through each stage (find the course,
+  download, build holes, save, build 3D scenery). Overpass sends no size, so the download stage eases toward
+  its end by bytes received. Offline map downloads use the same bar.
+- **Clear cache and reset app** (Menu → Reset): after a confirm, clears localStorage (courses, rounds,
+  settings), all Cache Storage (offline maps, app shell), any cookies, and the service worker, then reloads.
 - **Wake lock**: Screen Wake Lock API, re-acquired when you return to the app.
 
 Course data © OpenStreetMap contributors (ODbL). Imagery © Esri and partners.

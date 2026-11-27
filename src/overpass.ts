@@ -14,7 +14,8 @@ const HEDGE_MS = 8000;
 const TOTAL_MS = 90000;
 
 /** The public Overpass servers are often slow, rate-limited or down, so ask them in a staggered race. */
-export async function overpass(query: string): Promise<OverpassElement[]> {
+/** `onBytes` hears how much of the answer has arrived so far (the fastest server's). */
+export async function overpass(query: string, onBytes?: (n: number) => void): Promise<OverpassElement[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TOTAL_MS);
   // Start with whichever server answered last time.
@@ -28,7 +29,7 @@ export async function overpass(query: string): Promise<OverpassElement[]> {
     const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal,
       // overpass-api.de refuses some hosting origins by Referer (e.g. *.pages.dev); it doesn't need one.
       referrerPolicy: 'no-referrer' });
-    const text = await res.text();
+    const text = await readText(res, onBytes);
     if (!res.ok || !text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
     const els = JSON.parse(text).elements as OverpassElement[];
     try { localStorage.setItem('overpass:last', url); } catch { /* ignore */ }
@@ -67,6 +68,48 @@ export async function overpass(query: string): Promise<OverpassElement[]> {
   }
 }
 
+/** Reads a response body, reporting bytes as they arrive. */
+async function readText(res: Response, onBytes?: (n: number) => void): Promise<string> {
+  if (!onBytes || !res.ok || !res.body) return res.text();
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let n = 0;
+  let out = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    out += dec.decode(value, { stream: true });
+    onBytes(n);
+  }
+  return out + dec.decode();
+}
+
+/** Loading stages, in order, with the share of the progress bar each one gets. */
+export const LOAD_STEPS = {
+  find: { from: 0, to: 0.12, label: 'Finding the course' },
+  download: { from: 0.12, to: 0.72, label: 'Downloading holes, hazards and trees' },
+  build: { from: 0.72, to: 0.86, label: 'Building holes' },
+  save: { from: 0.86, to: 0.9, label: 'Saving for offline' },
+  scenery: { from: 0.9, to: 1, label: 'Building 3D scenery' },
+} as const;
+export type LoadStep = keyof typeof LOAD_STEPS;
+/** Progress callback: overall fraction 0..1 and the stage's text. */
+export type LoadProgress = (frac: number, label: string) => void;
+
+/** Typical course download is 0.3-3 MB and Overpass sends no length, so ease toward the end of the stage. */
+export function downloadFrac(bytes: number): number {
+  return 1 - Math.exp(-bytes / 900_000);
+}
+
+export function stepProgress(onProgress: LoadProgress | undefined, step: LoadStep, within = 0, extra = '') {
+  if (!onProgress) return;
+  const s = LOAD_STEPS[step];
+  onProgress(s.from + (s.to - s.from) * Math.max(0, Math.min(1, within)), s.label + extra);
+}
+
+export const nextFrame = () => new Promise<void>((r) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => setTimeout(r, 0)) : setTimeout(r, 0)));
+
 export interface CourseHit {
   id: string; // "way/123"
   name: string;
@@ -95,8 +138,9 @@ export async function searchCourses(q: string): Promise<CourseHit[]> {
 }
 
 /** Fetch a course boundary, then every golf feature in (and slightly around) it. */
-export async function loadCourse(id: string, fallbackName?: string): Promise<Course> {
+export async function loadCourse(id: string, fallbackName?: string, onProgress?: LoadProgress): Promise<Course> {
   const [type, osmId] = id.split('/');
+  stepProgress(onProgress, 'find');
   const head = await overpass(`[out:json][timeout:30];${type}(${osmId});out geom tags bb;`);
   const c = head[0];
   if (!c) throw new Error('Course not found in OpenStreetMap');
@@ -104,6 +148,8 @@ export async function loadCourse(id: string, fallbackName?: string): Promise<Cou
   const b = c.bounds!;
   const pad = 0.0015; // ~150 m, catches tees/greens drawn just outside the boundary
   const bbox = `${b.minlat - pad},${b.minlon - pad},${b.maxlat + pad},${b.maxlon + pad}`;
+  stepProgress(onProgress, 'download');
+  const mb = (n: number) => ` (${(n / 1e6).toFixed(1)} MB)`;
   // Golf features plus the scenery around them (trees, woods, buildings, paths, streams) for the map view.
   const els = await overpass(`[out:json][timeout:90];(
     nwr["golf"](${bbox});
@@ -113,7 +159,9 @@ export async function loadCourse(id: string, fallbackName?: string): Promise<Cou
     way["building"](${bbox});
     way["highway"](${bbox});
     way["waterway"~"^(stream|river|ditch|drain|canal)$"](${bbox});
-  );out geom;`);
+  );out geom;`, (n) => stepProgress(onProgress, 'download', downloadFrac(n), mb(n)));
+  stepProgress(onProgress, 'build');
+  await nextFrame(); // let the bar paint before the parse blocks the page
   const course = parseCourse(els, { id, name: c.tags?.name ?? fallbackName ?? 'Golf course', boundary });
   if (!course.holes.length) throw new Error('No holes are mapped for this course in OpenStreetMap yet');
   return course;

@@ -6,7 +6,7 @@ import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { scenery3d } from './scenery3d.ts';
-import { loadCourse, searchCourses, coursesNear, type CourseHit } from './overpass.ts';
+import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
@@ -614,15 +614,46 @@ async function openCourse(h: CourseHit, force = false) {
   const cached = !force && store.getCourse(h.id);
   if (cached) { setCourse(cached); sheet.close(); return; }
   msg(`Loading ${h.name} from OpenStreetMap…`);
+  setButtonsBusy(true);
+  progress(0, 'Starting');
   try {
-    const c = await loadCourse(h.id, h.name);
+    const c = await loadCourse(h.id, h.name, progress);
+    stepProgress(progress, 'save');
     store.saveCourse(c);
+    stepProgress(progress, 'scenery');
+    await nextFrame();
     setCourse(c);
+    progress(1, `Loaded ${c.holes.length} holes`);
     msg(`Loaded ${c.holes.length} holes. Saved for offline.`);
+    await new Promise((r) => setTimeout(r, 500)); // let the full bar show for a moment
     sheet.close();
   } catch (e) {
     msg(`Couldn't load: ${(e as Error).message}`);
+  } finally {
+    progress(null);
+    setButtonsBusy(false);
   }
+}
+
+/** The loading bar in the Courses sheet. `null` hides it. */
+function progress(frac: number | null, label = '') {
+  const bar = $('loadbar');
+  bar.hidden = frac == null;
+  if (frac == null) return;
+  const pctDone = Math.round(frac * 100);
+  // Never go backwards (e.g. a slower server's bytes after a faster one's).
+  const prev = Number(bar.getAttribute('aria-valuenow') ?? 0);
+  const shown = frac === 0 ? 0 : Math.max(prev, pctDone);
+  bar.setAttribute('aria-valuenow', String(shown));
+  bar.querySelector<HTMLElement>('i')!.style.width = shown + '%';
+  bar.querySelector('span')!.textContent = label;
+  bar.querySelector('b')!.textContent = shown + '%';
+}
+
+/** Course buttons do nothing while a load is running, so you can't start two at once. */
+function setButtonsBusy(on: boolean) {
+  for (const id of ['search', 'near', 'test-course', 'refresh', 'dl-tiles', 'reset']) $<HTMLButtonElement>(id).disabled = on;
+  document.querySelectorAll<HTMLButtonElement>('#results button, #saved button').forEach((b) => (b.disabled = on));
 }
 
 $('search').onclick = async () => {
@@ -663,12 +694,39 @@ $('dl-tiles').onclick = async () => {
   const btn = $<HTMLButtonElement>('dl-tiles');
   btn.disabled = true;
   try {
-    const r = await prefetchTiles(course.bbox, (d, t) => msg(`Downloading map… ${d}/${t}`));
+    progress(0, 'Downloading map');
+    const r = await prefetchTiles(course.bbox, (d, t) => { msg(''); progress(d / t, `Downloading map ${d}/${t} tiles`); });
+    progress(null);
     msg(r.failed ? `Saved ${r.total - r.failed}/${r.total} tiles (${r.failed} failed, try again on better signal).` : `Map saved for offline (${r.total} tiles).`);
   } finally {
+    progress(null);
     btn.disabled = false;
   }
 };
+
+// Wipes everything this app keeps on the device, then reloads a fresh copy.
+$('reset').onclick = async () => {
+  if (!window.confirm('Clear everything and reset the app?\n\nThis deletes saved courses, offline maps, all rounds and scores, and settings on this device. It cannot be undone.')) return;
+  msg('Clearing…');
+  await resetApp();
+  location.reload();
+};
+
+async function resetApp() {
+  try { localStorage.clear(); } catch { /* ignore */ }
+  try { sessionStorage.clear(); } catch { /* ignore */ }
+  // The app sets no cookies, but clear any this site has anyway.
+  for (const c of document.cookie.split(';')) {
+    const name = c.split('=')[0].trim();
+    if (name) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+  try {
+    if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
+  } catch { /* ignore */ }
+  try {
+    if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+  } catch { /* ignore */ }
+}
 
 $<HTMLInputElement>('sat').onchange = (e) => setView((e.target as HTMLInputElement).checked ? 'sat' : '3d');
 // Cycles 3D -> 2D -> Sat.

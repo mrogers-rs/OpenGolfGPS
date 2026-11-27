@@ -76,6 +76,7 @@
         <button id="test-course">Allenmore (test)</button>
       </div>
       <p id="msg" class="msg"></p>
+      <div id="loadbar" class="loadbar" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="track"><i></i></div><div class="lbl"><span></span><b></b></div></div>
       <ul id="results" class="list"></ul>
       <h3>Saved for offline</h3>
       <ul id="saved" class="list"></ul>
@@ -93,6 +94,9 @@
         </select>
       </label>
       <label class="check"><input type="checkbox" id="sim" /> Simulate location (tap map to move yourself)</label>
+      <h3>Reset</h3>
+      <button id="reset" class="danger">Clear cache and reset app</button>
+      <p class="fine">Deletes saved courses, offline maps, rounds and settings on this device, then reloads the latest version.</p>
       <p class="fine">Course data © OpenStreetMap contributors (ODbL). Imagery © Esri and partners.</p>
     </dialog>
 
