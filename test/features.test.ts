@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { parseCourse } from '../src/course.ts';
 import { hazardNumbers, layupMarks } from '../src/hazards.ts';
 import { yd } from '../src/yardage.ts';
-import { newRound, markShot, shotDistances, totals, isGir, pace, holeAllotments, fmtToPar } from '../src/round.ts';
+import { newRound, totals, isGir, pace, holeAllotments, fmtToPar } from '../src/round.ts';
 
 const data = JSON.parse(readFileSync(new URL('./fixtures/allenmore.json', import.meta.url), 'utf8'));
 const course = parseCourse(data.elements, { id: 'way/23143257', name: 'Allenmore Golf Course' });
@@ -68,15 +68,6 @@ test('scorecard totals and stats', () => {
   assert.equal(isGir(r.holes[2], 3), false);
   assert.equal(fmtToPar(0), 'E');
   assert.equal(fmtToPar(2), '+2');
-});
-
-test('shot tracker distances', () => {
-  const r = newRound(course);
-  const h = H(1);
-  assert.equal(markShot(r, 1, h.line[0]), null);
-  const d = markShot(r, 1, h.line[1])!;
-  assert.ok(d > 150 && d < 300);
-  assert.equal(shotDistances(r.holes[1]).length, 1);
 });
 
 test('pace of play', () => {

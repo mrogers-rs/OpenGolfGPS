@@ -39,8 +39,10 @@ export interface AppState {
   paceTarget?: number;
   /** Show hazard and layup numbers on the map. */
   hazards?: boolean;
-  /** Map view: tilted 3D drawn map (default), flat drawn map, or satellite photo. */
+  /** Map view: satellite photo (default), tilted 3D drawn map, or flat drawn map. */
   view?: MapView;
+  /** Which default view the saved state has been moved to (2 = satellite). */
+  viewDefault?: number;
   /** Hole cutout: darken everything but the current hole (default on). */
   cutout?: boolean;
   /** Your usual drive (yards), for the default tee-shot crosshair. */
@@ -49,8 +51,8 @@ export interface AppState {
 export type MapView = '3d' | '2d' | 'sat';
 export function loadState(): AppState {
   const s: AppState = { hazards: true, ...get<AppState>('state', { hole: 0, holeSetAt: 0, auto: true, satellite: false }) };
-  // Before views existed there was only the satellite switch: everyone starts on the new 3D default.
-  if (!s.view) { s.view = '3d'; s.satellite = false; }
+  // Satellite is the default view: new installs, and once for everyone who had the old 3D default.
+  if ((s.viewDefault ?? 0) < 2) { s.view = 'sat'; s.satellite = true; s.viewDefault = 2; }
   return s;
 }
 export const saveState = (s: AppState) => set('state', s);

@@ -1,6 +1,6 @@
 // Scorecard sheet: quick entry for the current hole, the full card, round stats and past rounds.
 import type { Course, Hole } from './types.ts';
-import { type Fairway, type Round, type HoleScore, totals, fmtToPar, pct, isGir, shotDistances } from './round.ts';
+import { type Fairway, type Round, type HoleScore, totals, fmtToPar, pct, isGir } from './round.ts';
 import * as store from './storage.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -70,8 +70,6 @@ export function renderCard() {
   chips($('c-fw'), ['left', 'hit', 'right'] as Fairway[], s.fairway, (v) => ({ left: '← Left', hit: 'Hit', right: 'Right →' } as Record<string, string>)[v], (v) => edit((x) => { x.fairway = v; }));
   chips($('c-pen'), [0, 1, 2, 3], s.penalties ?? 0, String, (v) => edit((x) => { x.penalties = v ?? 0; }));
   chips($('c-sand'), ['yes'], s.sand ? 'yes' : undefined, () => 'In a bunker', (v) => edit((x) => { x.sand = v ? 1 : 0; }));
-  const shots = shotDistances(s);
-  $('c-shots').textContent = s.shots?.length ? `${s.shots.length} shot${s.shots.length > 1 ? 's' : ''} marked${shots.length ? ': ' + shots.map((d) => Math.round(d)).join(', ') + ' yd' : ''}` : '';
 
   renderTable(c, r);
   renderStats(r);
