@@ -9,6 +9,8 @@ export const CORRIDOR_M = 42;
 export const GREEN_MARGIN_M = 20;
 /** Inside this many yards of the green, the view becomes a close-up of the green. */
 export const APPROACH_YD = 100;
+/** Extra room kept around the line of play when framing the hole (meters). */
+export const VIEW_MARGIN_M = 18;
 
 /** The hole's shape: tee to green along the line of play plus the green, with a margin. */
 export function holeCorridor(h: Hole): GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> {
@@ -45,11 +47,13 @@ export type Framing =
 /** What the hole view should fit on screen, given your position (null when GPS isn't usable for this hole). */
 export function framing(h: Hole, me: LngLat | null): Framing {
   const green = h.green ?? [];
-  if (!me) return { mode: 'hole', pts: [...h.line, ...green], from: h.line[0] };
+  // A little of the fairway either side is kept in view too, so the hole doesn't touch the screen edges.
+  const roomy = (pts: LngLat[]) => turf.coordAll(turf.buffer(turf.multiPoint(pts), VIEW_MARGIN_M, { units: 'meters', steps: 4 })!) as LngLat[];
+  if (!me) return { mode: 'hole', pts: roomy([...h.line, ...green]), from: h.line[0] };
   if (yd(me, h.center) <= APPROACH_YD) {
     const ring = green.length ? green : [h.center];
     const pts = turf.coordAll(turf.buffer(turf.multiPoint(ring), 10, { units: 'meters', steps: 8 })!) as LngLat[];
     return { mode: 'approach', pts, from: me };
   }
-  return { mode: 'ahead', pts: [...playLine(h, me), ...green], from: me };
+  return { mode: 'ahead', pts: roomy([...playLine(h, me), ...green]), from: me };
 }

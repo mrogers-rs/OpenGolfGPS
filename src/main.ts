@@ -6,6 +6,7 @@ import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { scenery3d } from './scenery3d.ts';
+import { distanceArcs } from './arcs.ts';
 import { holeCorridor, holeMask, insideCorridor, framing, APPROACH_YD } from './cutout.ts';
 import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
@@ -57,6 +58,7 @@ const map = new maplibregl.Map({
       scenery3d: { type: 'geojson', data: turf.featureCollection([]) },
       cutout: { type: 'geojson', data: turf.featureCollection([]) },
       pinline: { type: 'geojson', data: turf.featureCollection([]) },
+      arcs: { type: 'geojson', data: turf.featureCollection([]) },
     },
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
@@ -89,6 +91,7 @@ const map = new maplibregl.Map({
       { id: 'cutout', type: 'fill', source: 'cutout', layout: { visibility: 'none' }, paint: { 'fill-color': '#040805', 'fill-opacity': 0.9 } },
       { id: 'cutout-edge', type: 'line', source: 'cutout', layout: { visibility: 'none', 'line-join': 'round' }, paint: { 'line-color': '#a8d8ae', 'line-opacity': 0.45, 'line-width': 1.5, 'line-blur': 0.5 } },
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
+      { id: 'arcs', type: 'line', source: 'arcs', layout: { 'line-cap': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 2.5, 'line-opacity': 0.9 } },
       { id: 'hole-line', type: 'line', source: 'hole', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 2] } },
       { id: 'shot-line', type: 'line', source: 'shots', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ff7a1a', 'line-width': 2.5 } },
       { id: 'shot-pt', type: 'circle', source: 'shots', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#ff7a1a', 'circle-stroke-color': '#000', 'circle-stroke-width': 1.5 } },
@@ -137,6 +140,7 @@ function markerPool(cls: string) {
 }
 const hazardLabels = markerPool('hz');
 const layupLabels = markerPool('lay');
+const arcLabels = markerPool('arclbl');
 
 function el(cls: string, text = '') {
   const d = document.createElement('div');
@@ -271,7 +275,8 @@ function playBearing(from: LngLat, to: LngLat) {
 
 /** Room the overlays (hole card, tool buttons, shot bar) leave for the hole. */
 function fitPadding() {
-  return wide() ? { top: 118, bottom: 56, left: 24, right: 76 } : { top: 124, bottom: 52, left: 24, right: 72 };
+  // Generous margins so the hole sits clear of the hole card, tool buttons and screen edges.
+  return wide() ? { top: 128, bottom: 72, left: 56, right: 96 } : { top: 150, bottom: 72, left: 52, right: 88 };
 }
 
 /**
@@ -347,7 +352,7 @@ function fitGreen(h: Hole) {
   const from = usablePlayer(h) ?? h.line[Math.max(0, h.line.length - 2)];
   const bearing = playBearing(from, h.center);
   const pts = turf.coordAll(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as LngLat[];
-  fitPoints(pts, bearing, 0, wide() ? { top: 70, bottom: 40, left: 40, right: 80 } : { top: 70, bottom: 40, left: 40, right: 70 }, 21);
+  fitPoints(pts, bearing, 0, wide() ? { top: 90, bottom: 60, left: 60, right: 100 } : { top: 130, bottom: 60, left: 50, right: 86 }, 21);
 }
 
 // ---------- Flyover ----------
@@ -407,6 +412,7 @@ function render() {
   }
 
   renderPinLine(h, me, pin);
+  renderArcs(h, me);
   renderHazards(h, me);
   renderGreenInfo(h, n.frontPt, n.backPt);
   renderShots(h);
@@ -424,6 +430,13 @@ function render() {
     targetMarker.remove();
     (map.getSource('measure') as GeoJSONSource | undefined)?.setData(turf.featureCollection([]));
   }
+}
+
+/** Drive arcs (200-300 yd) on par 4s and 5s, from the tee or from you. Hidden in green view and close to the green. */
+function renderArcs(h: Hole, me: LngLat | null) {
+  const arcs = greenView || !state.hazards ? [] : distanceArcs(h, me);
+  (map.getSource('arcs') as GeoJSONSource | undefined)?.setData(turf.featureCollection(arcs.map((a) => turf.lineString(a.line, { color: a.color }))));
+  arcLabels(arcs.map((a) => ({ at: a.label, offset: [a.side === 'R' ? 16 : -16, 0] as [number, number], html: `<span style="background:${a.color}">${a.yds}</span>` })));
 }
 
 /** Near the green: a line from you to the pin with the yardage on it. */

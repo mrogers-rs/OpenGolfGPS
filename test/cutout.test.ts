@@ -41,3 +41,15 @@ test('the view frames less of the hole as you walk, then the green close up', ()
   assert.equal(ap.mode, 'approach');
   assert.ok(span(ap.pts) < span(ahead.pts));
 });
+
+test('distance arcs on par 4s and 5s, short of the green, at the right range', async () => {
+  const { distanceArcs } = await import('../src/arcs.ts');
+  const p3 = course.holes.find((x) => x.par === 3)!;
+  assert.equal(distanceArcs(p3, null).length, 0);
+  const p5 = course.holes.find((x) => x.par === 5)!;
+  const arcs = distanceArcs(p5, null);
+  assert.ok(arcs.length >= 4, `got ${arcs.map((a) => a.yds)}`);
+  for (const a of arcs) for (const p of [a.line[0], a.line[8], a.line[16]]) assert.ok(Math.abs(yd(p5.line[0], p) - a.yds) < 1.5);
+  const p4 = course.holes.find((x) => x.par === 4 && yd(x.line[0], x.center) < 330)!;
+  assert.ok(distanceArcs(p4, null).every((a) => a.yds < yd(p4.line[0], p4.center) - 15));
+});

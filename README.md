@@ -71,6 +71,9 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
   Landscape runs the hole from the bottom-left to the top-right corner. With GPS on the hole, the view frames only
   what's left (you → green) and re-frames every ~10 yd as you walk; inside 100 yd it becomes a flat close-up of the
   green with a line to the pin and its yardage. Panning or zooming by hand pauses this until Recenter or the next hole.
+- **Distance arcs** (`src/arcs.ts`, par 4s and 5s): 200 (blue), 225 (green), 250 (yellow), 270 (orange) and
+  300 (red) yd arcs from the tee, or from you once GPS puts you on the hole, centered on the line of play (follows
+  doglegs) and left out when they'd land within 15 yd of the green. Shown with the hazard numbers setting.
 - **Loading bar**: opening or refreshing a course shows a progress bar through each stage (find the course,
   download, build holes, save, build 3D scenery). Overpass sends no size, so the download stage eases toward
   its end by bytes received. Offline map downloads use the same bar.
