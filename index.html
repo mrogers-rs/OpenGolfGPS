@@ -21,18 +21,19 @@
       </div>
       <div id="pace" hidden></div>
 
+      <div id="holecard">
+        <button id="prev" class="nav" aria-label="Previous hole">‹</button>
+        <button id="holeinfo" aria-label="Pick hole">
+          <span class="hl">HOLE</span>
+          <span id="holeno">–</span>
+          <span id="holemeta"></span>
+        </button>
+        <button id="next" class="nav" aria-label="Next hole">›</button>
+        <button id="auto" aria-pressed="true" title="Auto-advance to the next hole">AUTO</button>
+      </div>
+
       <main id="mapwrap">
         <div id="map"></div>
-        <div id="holecard">
-          <button id="prev" class="nav" aria-label="Previous hole">‹</button>
-          <button id="holeinfo" aria-label="Pick hole">
-            <span class="hl">HOLE</span>
-            <span id="holeno">–</span>
-            <span id="holemeta"></span>
-          </button>
-          <button id="next" class="nav" aria-label="Next hole">›</button>
-          <button id="auto" aria-pressed="true" title="Auto-advance to the next hole">AUTO</button>
-        </div>
         <div id="measure" hidden>
           <span><i class="sw to"></i>To target <i class="sw rest"></i>To green</span>
           <button id="m-clear" aria-label="Clear target">✕ Clear</button>

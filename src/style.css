@@ -363,3 +363,60 @@ input[type='search'] { min-height: 52px; }
 @media (orientation: landscape) and (min-width: 768px) and (min-height: 600px) {
   #nums { margin-right: 104px; }
 }
+
+/* ---------- Hole card sits in the page now (not inside the map) ---------- */
+/* Landscape: still floats over the top-left of the map. */
+@media (orientation: landscape) and (min-width: 560px) {
+  #holecard { grid-area: map; position: relative; left: auto; top: auto; align-self: start; justify-self: start; margin: 10px 0 0 10px; z-index: 4; }
+}
+
+/* ---------- Portrait: one compact strip on top (hole + yardages), slim tab bar, the rest is the hole ---------- */
+@media (orientation: portrait), (max-width: 559px) {
+  #app { grid-template-columns: auto 1fr; grid-template-rows: auto auto auto 1fr auto; grid-template-areas: 'brand brand' 'pace pace' 'hole nums' 'map map' 'tabs tabs'; }
+  #holecard, #nums { background: #070a08; border-bottom: 1px solid #1a1f1b; }
+  #holecard {
+    grid-area: hole; position: relative; left: auto; top: auto; z-index: 4;
+    grid-template-columns: auto auto auto; grid-template-rows: 1fr auto; grid-template-areas: 'prev info next' 'prev auto next';
+    gap: 0; padding: 4px 0 4px 2px; border: none; border-bottom: 1px solid #1a1f1b; border-radius: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  #prev { grid-area: prev; } #next { grid-area: next; } #holeinfo { grid-area: info; } #auto { grid-area: auto; }
+  #holecard .nav { width: 34px; min-height: 0; height: 100%; font-size: 30px; }
+  #holeinfo { padding: 0 2px; min-height: 0; }
+  #holeinfo .hl { font-size: 9px; letter-spacing: .16em; }
+  #holeno { font-size: 30px; }
+  #holemeta { flex-wrap: wrap; justify-content: center; max-width: 92px; gap: 0 3px; font-size: 11px; line-height: 1.25; white-space: normal; }
+  #holemeta i { width: 0; overflow: hidden; color: transparent; }
+  #auto { min-height: 30px; margin: 2px 0 0; padding: 0 6px; font-size: 10px; letter-spacing: .1em; border-radius: 8px; }
+  #nums {
+    grid-area: nums; grid-template-columns: 1fr 1.35fr 1fr; align-items: stretch; gap: 5px;
+    padding: 6px 8px 4px 4px; margin: 0; border-top: none;
+  }
+  #nums .num { justify-content: center; padding: 3px 2px 4px; border-radius: 12px; }
+  #nums .num span { font-size: 10px; letter-spacing: .1em; }
+  .side b { font-size: 28px; } .mid b { font-size: 42px; }
+  #status { grid-column: 1 / -1; flex-wrap: wrap; justify-content: center; gap: 0 10px; padding: 1px 2px 0; font-size: 10.5px; line-height: 1.3; }
+  #tabs { gap: 4px; padding: 3px 6px calc(var(--safe-b) + 3px); }
+  .tab { flex-direction: row; justify-content: center; gap: 6px; min-height: 46px; padding: 2px; border-radius: 12px; font-size: 13px; }
+  .tab svg { width: 22px; height: 22px; flex: none; }
+  #measure, #greeninfo { bottom: 72px; }
+}
+@media (orientation: portrait) and (min-width: 700px) {
+  #holemeta { max-width: none; flex-wrap: nowrap; }
+  #holemeta i { width: auto; color: #666; }
+  #holecard .nav { width: 56px; font-size: 40px; }
+  #holeinfo .hl { font-size: 11px; }
+  #holeno { font-size: 42px; }
+  #holemeta { font-size: 14px; }
+  #auto { min-height: 34px; font-size: 13px; }
+  #nums { gap: 8px; padding: 8px 12px 6px 6px; }
+  #nums .num span { font-size: 12px; }
+  .side b { font-size: 44px; } .mid b { font-size: 64px; }
+  #status { font-size: 13px; }
+  .tab { min-height: 58px; font-size: 16px; gap: 10px; }
+  .tab svg { width: 28px; height: 28px; }
+}
+/* Very narrow phones: drop the tab labels' gap, keep everything on one line. */
+@media (max-width: 360px) {
+  .tab { font-size: 11px; gap: 3px; }
+  .side b { font-size: 26px; } .mid b { font-size: 38px; }
+}
