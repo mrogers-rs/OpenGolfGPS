@@ -48,6 +48,10 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 - **Pace of play**: the round clock starts when GPS first puts you on a tee (or when you first score, mark
   a shot or set a pin). Each hole gets a share of the target (default 4:15 for 18, weighted 11/14/17 for
   par 3/4/5), and the status line shows minutes ahead or behind. Target is in the menu.
+- **Map view** (Sat/Map button): a drawn course map with woods, single trees, tree rows, scrub, buildings
+  (slightly raised, so they show in the flyover), roads, paths, cart paths and streams from OSM, plus outlined
+  bunkers and water. Satellite view hides the scenery since the photo shows it. Courses saved before this
+  are re-fetched quietly the next time they're opened online (`COURSE_DATA_VERSION` in `src/course.ts`).
 - **Offline** (`public/sw.js`): app shell precached on first visit; satellite tiles cached as viewed, and
   "Download map for offline" prefetches the course area (zoom 14–19).
 - **Wake lock**: Screen Wake Lock API, re-acquired when you return to the app.

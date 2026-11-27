@@ -4,6 +4,7 @@ import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import * as turf from '@turf/turf';
 import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
+import { COURSE_DATA_VERSION } from './course.ts';
 import { loadCourse, searchCourses, coursesNear, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
@@ -33,6 +34,14 @@ let greenView = false;
 const ROUND_MAX_MS = 14 * 3600 * 1000;
 
 // ---------- Map ----------
+/** Map-view colors. Rough is the background; everything else is drawn on top. */
+const MAP = { rough: '#3f7d3c', bg: '#478a43', wood: '#295c2d', scrub: '#5a7d3c', wetland: '#5a8c78', fairway: '#69c25b', tee: '#7ed06e', green: '#8eef80', bunker: '#efe1a8', water: '#3a8de4' };
+/** Golf surfaces, lightly tinted over the photo in satellite view. */
+const GOLF_FILLS = ['fairway', 'tee', 'green', 'bunker', 'water'];
+/** Hidden in satellite view. */
+const SCENERY = ['wood', 'scrub', 'wetland', 'rough', 'wood-edge', 'stream', 'road', 'path', 'building', 'treerow', 'tree-shadow', 'tree'];
+const TREE_R: any = ['interpolate', ['exponential', 2], ['zoom'], 15, 1.6, 20, 50];
+
 const map = new maplibregl.Map({
   container: 'map',
   style: {
@@ -47,13 +56,29 @@ const map = new maplibregl.Map({
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
       { id: 'sat', type: 'raster', source: 'sat', layout: { visibility: state.satellite ? 'visible' : 'none' } },
-      fill('fairway', '#4caf50'),
-      fill('tee', '#58b85c'),
-      fill('green', '#7be07f'),
-      fill('bunker', '#e9dca6'),
-      fill('water', '#2f7fd6'),
-      { id: 'green-line', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'green'], paint: { 'line-color': '#fff', 'line-width': 1.5 } },
-      { id: 'cartpath', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'cartpath'], paint: { 'line-color': '#999', 'line-width': 1, 'line-opacity': 0.6 } },
+      // Scenery: drawn only in map view (the photo already shows it).
+      fill('wood', MAP.wood),
+      fill('scrub', MAP.scrub),
+      fill('wetland', MAP.wetland),
+      fill('rough', MAP.rough),
+      line('wood-edge', 'wood', '#214b25', 1),
+      fill('fairway', MAP.fairway),
+      fill('tee', MAP.tee),
+      fill('green', MAP.green),
+      fill('bunker', MAP.bunker),
+      fill('water', MAP.water),
+      line('stream', 'stream', MAP.water, ['interpolate', ['linear'], ['zoom'], 15, 1.5, 19, 6]),
+      line('bunker-line', 'bunker', '#c2ab62', 1),
+      line('water-line', 'water', '#1f5fae', 1.2),
+      line('road', 'road', '#ddd6c6', ['interpolate', ['linear'], ['zoom'], 15, 2, 19, 12]),
+      line('path', 'path', '#eadfc2', ['interpolate', ['linear'], ['zoom'], 15, 1, 19, 3], [2, 1.5]),
+      line('cartpath', 'cartpath', '#d4ccb6', ['interpolate', ['linear'], ['zoom'], 15, 1.2, 19, 5]),
+      { id: 'building', type: 'fill-extrusion', source: 'course', filter: ['==', ['get', 'kind'], 'building'], paint: { 'fill-extrusion-color': '#bdb2a3', 'fill-extrusion-height': 7, 'fill-extrusion-opacity': 0.95 } },
+      { id: 'treerow', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'treerow'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#2c6430', 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 15, 3, 20, 90] } },
+      // Trees: a soft shadow plus a canopy about 5 m across in radius, scaled with zoom.
+      { id: 'tree-shadow', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#000', 'circle-opacity': 0.22, 'circle-blur': 0.4, 'circle-translate': [2, 2], 'circle-radius': TREE_R } },
+      { id: 'tree', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#2e7432', 'circle-stroke-color': '#1d5221', 'circle-stroke-width': 1, 'circle-radius': TREE_R } },
+      line('green-line', 'green', '#fff', 1.5),
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
       { id: 'hole-line', type: 'line', source: 'hole', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 2] } },
       { id: 'shot-line', type: 'line', source: 'shots', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ff7a1a', 'line-width': 2.5 } },
@@ -71,7 +96,10 @@ const map = new maplibregl.Map({
 map.touchZoomRotate.disableRotation();
 
 function fill(kind: string, color: string): maplibregl.LayerSpecification {
-  return { id: kind, type: 'fill', source: 'course', filter: ['==', ['get', 'kind'], kind], paint: { 'fill-color': color, 'fill-opacity': state.satellite ? 0.18 : 0.85 } };
+  return { id: kind, type: 'fill', source: 'course', filter: ['==', ['get', 'kind'], kind], paint: { 'fill-color': color, 'fill-opacity': 0.95 } };
+}
+function line(id: string, kind: string, color: string, width: any, dash?: number[]): maplibregl.LayerSpecification {
+  return { id, type: 'line', source: 'course', filter: ['==', ['get', 'kind'], kind], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': color, 'line-width': width, ...(dash ? { 'line-dasharray': dash } : {}) } };
 }
 
 const playerMarker = new maplibregl.Marker({ element: el('dot-player') });
@@ -147,6 +175,25 @@ function setCourse(c: Course, keepHole = false) {
     if (at != null && fresh) state.hole = at;
   }
   showHole(true);
+  upgradeCourse(c);
+}
+
+/** Courses saved by an older version lack scenery: quietly re-fetch them when online. */
+let upgrading = '';
+function upgradeCourse(c: Course) {
+  if ((c.v ?? 1) >= COURSE_DATA_VERSION || !navigator.onLine || upgrading === c.id) return;
+  upgrading = c.id;
+  loadCourse(c.id, c.name)
+    .then((fresh) => {
+      if (fresh.holes.length !== c.holes.length) return; // mapping changed a lot; leave it for a manual refresh
+      store.saveCourse(fresh);
+      if (course?.id !== fresh.id) return;
+      course = fresh;
+      (map.getSource('course') as GeoJSONSource).setData(fresh.features);
+      showHole(false);
+    })
+    .catch(() => { /* try again next time */ })
+    .finally(() => { upgrading = ''; });
 }
 
 function hole(): Hole | null {
@@ -602,10 +649,10 @@ function setSatellite(on: boolean) {
 function applyView() {
   const on = state.satellite;
   map.setLayoutProperty('sat', 'visibility', on ? 'visible' : 'none');
-  map.setPaintProperty('bg', 'background-color', on ? '#0d2a14' : '#2e6b34'); // rough
-  for (const k of ['fairway', 'tee', 'green', 'bunker', 'water']) map.setPaintProperty(k, 'fill-opacity', on ? 0.18 : 0.95);
-  map.setPaintProperty('cartpath', 'line-opacity', on ? 0.6 : 0.9);
-  map.setPaintProperty('cartpath', 'line-color', on ? '#999' : '#c9c2b0');
+  map.setPaintProperty('bg', 'background-color', on ? '#0d2a14' : MAP.bg);
+  for (const k of GOLF_FILLS) map.setPaintProperty(k, 'fill-opacity', on ? 0.18 : 0.95);
+  for (const k of SCENERY) map.setLayoutProperty(k, 'visibility', on ? 'none' : 'visible');
+  map.setPaintProperty('cartpath', 'line-opacity', on ? 0.6 : 1);
   // The button names the view you'd switch to.
   $('viewtoggle').textContent = on ? 'Map' : 'Sat';
   $<HTMLInputElement>('sat').checked = on;
