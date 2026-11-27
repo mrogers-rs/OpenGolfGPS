@@ -276,7 +276,8 @@ export async function loadCourse(id: string, fallbackName?: string, onProgress?:
   stepProgress(onProgress, 'build');
   await nextFrame(); // let the bar paint before the parse blocks the page
   const course = parseCourse(els, { id, name: c.tags?.name ?? fallbackName ?? 'Golf course', boundary });
-  if (!course.holes.length) throw new Error('No holes are mapped for this course in OpenStreetMap yet');
+  // No holes mapped yet: still return the course (framed on its boundary) so it can be mapped in the app.
+  if (!course.holes.length) course.bbox = [b.minlon, b.minlat, b.maxlon, b.maxlat];
   return course;
 }
 

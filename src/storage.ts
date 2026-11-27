@@ -1,6 +1,7 @@
 // Saved courses and app state, in localStorage (a course is ~50-150 KB).
 import type { Course } from './types.ts';
 import type { Round } from './round.ts';
+import type { CourseEdits } from './edits.ts';
 
 const get = <T>(k: string, d: T): T => {
   try {
@@ -69,3 +70,8 @@ export function deleteRound(id: string) {
   localStorage.removeItem('round:' + id);
   set('rounds', savedRounds().filter((s) => s.id !== id));
 }
+
+// ---------- Course edits (made in the app; see edits.ts) ----------
+export const getEdits = (courseId: string) => get<CourseEdits | null>('edits:' + courseId, null);
+export const saveEdits = (e: CourseEdits) => set('edits:' + e.courseId, e);
+export const deleteEdits = (courseId: string) => localStorage.removeItem('edits:' + courseId);

@@ -16,6 +16,8 @@ import { hazardNumbers } from './hazards.ts';
 import { type Round, newRound, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
 import { initCard, renderCard } from './card.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
+import { applyEdits, closeRing, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
+import { BUILTIN, bundledEdits } from './courses/builtin.ts';
 
 /** Test course: Auburn Golf Course, Auburn WA. Its OSM id is looked up by name the first time (then remembered). */
 /** Built-in test course, found by position (29630 Green River Rd SE, Auburn WA). The key holds its OSM id once found. */
@@ -35,6 +37,9 @@ let sim = params.has('sim');
 let lastFixAt = 0;
 let round: Round | null = null;
 let greenView = false;
+/** Course editor state (see Course editor below); null when not editing. */
+type Tool = 'tee' | 'green' | 'dogleg' | 'bunker' | 'water';
+let editing: { ref: number; tool: Tool | null; pts: LngLat[]; sel: string | null } | null = null;
 /** A round older than this (since its start) isn't resumed. */
 const ROUND_MAX_MS = 14 * 3600 * 1000;
 
@@ -60,6 +65,7 @@ const map = new maplibregl.Map({
       cutout: { type: 'geojson', data: turf.featureCollection([]) },
       pinline: { type: 'geojson', data: turf.featureCollection([]) },
       arcs: { type: 'geojson', data: turf.featureCollection([]) },
+      edit: { type: 'geojson', data: turf.featureCollection([]) },
     },
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
@@ -98,6 +104,10 @@ const map = new maplibregl.Map({
       // Tap-to-measure: thick legs (you -> target in yellow, target -> pin in white) on a dark casing.
       { id: 'measure-casing', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.55 } },
       { id: 'measure-line', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['match', ['get', 'leg'], 'to', '#ffd400', '#ffffff'], 'line-width': 5 } },
+      // Course editor: shapes you've marked (outlined) and the one you're drawing.
+      { id: 'edit-fill', type: 'fill', source: 'edit', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['match', ['get', 'kind'], 'green', '#8eef80', 'bunker', '#efe1a8', 'water', '#3a8de4', '#fff'], 'fill-opacity': ['case', ['get', 'drawing'], 0.45, 0.3] } },
+      { id: 'edit-line', type: 'line', source: 'edit', filter: ['!=', ['geometry-type'], 'Point'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['case', ['get', 'sel'], '#ff3b30', ['get', 'drawing'], '#ffd400', ['match', ['get', 'kind'], 'green', '#b6ffad', 'bunker', '#fff3c4', 'water', '#9cc9ff', 'line', '#ffffff', '#fff']], 'line-width': ['case', ['any', ['get', 'sel'], ['get', 'drawing']], 3.5, 2.5] } },
+      { id: 'edit-pts', type: 'circle', source: 'edit', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 6], 'circle-color': ['match', ['get', 'kind'], 'tee', '#2f7bff', 'dogleg', '#ffd400', '#ffd400'], 'circle-stroke-color': '#000', 'circle-stroke-width': 2 } },
     ],
   },
   center: TEST_COURSE.center,
@@ -180,6 +190,7 @@ targetMarker.on('drag', () => {
 
 map.on('click', (e) => {
   const p: LngLat = [e.lngLat.lng, e.lngLat.lat];
+  if (editing) return editTap(p, e.point);
   const h = hole();
   if (greenView && h?.green && turf.booleanPointInPolygon(p, turf.polygon([h.green]))) {
     // In green view, tapping the green sets today's pin.
@@ -198,7 +209,9 @@ map.on('click', (e) => {
 });
 
 // ---------- Course ----------
-function setCourse(c: Course, keepHole = false) {
+function setCourse(raw: Course, keepHole = false) {
+  baseCourse = raw;
+  const c = withEdits(raw);
   course = c;
   $('coursename').textContent = c.name;
   round = resumeRound(c);
@@ -215,8 +228,14 @@ function setCourse(c: Course, keepHole = false) {
     if (at != null && fresh) state.hole = at;
   }
   showHole(true);
-  upgradeCourse(c);
+  upgradeCourse(raw);
 }
+
+/** The OpenStreetMap course as loaded (before edits). */
+let baseCourse: Course | null = null;
+/** Your edits for a course (this device), else the course file built into the app, if any. */
+const editsFor = (id: string): CourseEdits | null => store.getEdits(id) ?? bundledEdits(id);
+const withEdits = (c: Course) => applyEdits(c, editsFor(c.id));
 
 /** All raised trees for the course; the hole cutout shows only the ones on the current hole. */
 let sceneryAll: GeoJSON.FeatureCollection = turf.featureCollection([]);
@@ -229,7 +248,7 @@ let targetCleared = false;
 
 /** Darkens everything but the current hole (when the cutout is on) and keeps raised trees to the hole. */
 function updateCutout(h: Hole) {
-  const on = state.cutout !== false;
+  const on = state.cutout !== false && !editing;
   const corridor = holeCorridor(h);
   (map.getSource('cutout') as GeoJSONSource).setData(on ? holeMask(corridor) : turf.featureCollection([]));
   (map.getSource('scenery3d') as GeoJSONSource).setData(on ? turf.featureCollection(insideCorridor(sceneryAll.features, corridor)) : sceneryAll);
@@ -245,18 +264,32 @@ function upgradeCourse(c: Course) {
       if (fresh.holes.length !== c.holes.length) return; // mapping changed a lot; leave it for a manual refresh
       store.saveCourse(fresh);
       if (course?.id !== fresh.id) return;
-      course = fresh;
-      (map.getSource('course') as GeoJSONSource).setData(fresh.features);
-      sceneryAll = scenery3d(fresh);
-      fairwayPolys = fresh.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
-      showHole(false);
+      baseCourse = fresh;
+      redraw();
     })
     .catch(() => { /* try again next time */ })
     .finally(() => { upgrading = ''; });
 }
 
 function hole(): Hole | null {
-  return course ? course.holes[state.hole] ?? null : null;
+  const h = course ? course.holes[state.hole] ?? null : null;
+  // While editing, only the hole being edited counts (it may not be finished yet).
+  if (editing && h?.ref !== editing.ref) return null;
+  return h;
+}
+
+/** Re-applies edits to the loaded course and redraws it, keeping the current hole. */
+function redraw() {
+  if (!baseCourse) return;
+  const ref = editing?.ref ?? course?.holes[state.hole]?.ref;
+  course = withEdits(baseCourse);
+  (map.getSource('course') as GeoJSONSource).setData(course.features);
+  sceneryAll = scenery3d(course);
+  fairwayPolys = course.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
+  const i = course.holes.findIndex((h) => h.ref === ref);
+  if (i >= 0) state.hole = i;
+  else if (!editing) state.hole = Math.min(state.hole, Math.max(0, course.holes.length - 1));
+  showHole(false);
 }
 
 /** `manual` = picked by hand. Auto-advance then carries on from the hole you picked. */
@@ -274,7 +307,8 @@ function goHole(i: number, _manual: boolean) {
 
 function showHole(fit: boolean) {
   const h = hole();
-  if (!h) return;
+  if (editing) drawEdit();
+  if (!h) { clearHole(); return; }
   $('holeno').textContent = String(h.ref);
   const len = Math.round(pathYd([...h.line.slice(0, -1), h.center]));
   $('holemeta').innerHTML = [h.par && `<b>Par ${h.par}</b>`, `${len} yds`, h.handicap && `HCP ${h.handicap}`].filter(Boolean).join('<i>·</i>');
@@ -319,9 +353,14 @@ function fitPadding() {
   // In landscape the yardage card floats at the top of the map: keep the hole below it.
   const nums = document.getElementById('nums')?.getBoundingClientRect();
   const numsBottom = nums && nums.height && nums.top < box.top + box.height / 2 ? nums.bottom - box.top : 0;
+  // The course editor's bar covers the bottom of the map.
+  const bar = editing ? $('editbar').getBoundingClientRect() : null;
+  const barLift = bar && bar.height && !wide() ? box.bottom - bar.top + 16 : 0;
+  // In landscape it's a panel down the right side instead.
+  const barSide = bar && bar.height && wide() ? box.right - bar.left + 16 : 0;
   const pad = wide()
-    ? { top: Math.max(96, cardBottom * 0.75, numsBottom + 16), bottom: 72, left: 56, right: toolsW + 24 }
-    : { top: Math.max(30, cardBottom + 28), bottom: Math.max(70, cardLift + 16), left: 32, right: toolsW + 8 };
+    ? { top: Math.max(96, cardBottom * 0.75, numsBottom + 16), bottom: 72, left: 56, right: Math.max(toolsW + 24, barSide) }
+    : { top: Math.max(30, cardBottom + 28), bottom: Math.max(70, cardLift + 16, barLift), left: 32, right: toolsW + 8 };
   return unstretch(pad);
 }
 
@@ -363,7 +402,7 @@ function fitHole(h: Hole, animate = false) {
 /** Re-frames the hole as you walk (every ~10 yd), unless you've moved the map yourself. */
 function follow() {
   const h = hole();
-  if (!h || !player || greenView || flying || target || userMoved) return;
+  if (!h || !player || greenView || flying || target || userMoved || editing) return;
   if (lastFitFrom && yd(lastFitFrom, player) < 10) return;
   fitHole(h, true);
 }
@@ -444,12 +483,22 @@ async function flyover() {
   }
 }
 
+/** Nothing to show (a hole you're still mapping): blank numbers and markers. */
+function clearHole() {
+  for (const id of ['front', 'center', 'back']) $(id).textContent = '–';
+  $('holemeta').textContent = '';
+  for (const m of [flagMarker, frontMarker, backMarker, targetMarker, pinLabel]) m.remove();
+  hazardLabels([]); arcLabels([]); legLabels([]);
+  $('measure').hidden = true;
+  for (const id of ['hole', 'measure', 'arcs', 'pinline', 'cutout']) (map.getSource(id) as GeoJSONSource | undefined)?.setData(turf.featureCollection([]));
+}
+
 // ---------- Numbers ----------
 const fmt = (n: number) => String(Math.round(n));
 
 function render() {
   const h = hole();
-  if (!h) return;
+  if (!h) { if (course) clearHole(); return; }
   const n = greenNumbers(h, player);
   const pin = pinOf(h);
   const me = usablePlayer(h);
@@ -475,7 +524,7 @@ function render() {
   renderPace();
 
   // Your crosshair if you placed one, else the default drive spot from the tee (par 4/5) unless you cleared it.
-  shownTarget = target ?? (!targetCleared && !greenView ? driveTarget(h, fairwayPolys, me, state.drive ?? DEFAULT_DRIVE_YD) : null);
+  shownTarget = editing ? null : target ?? (!targetCleared && !greenView ? driveTarget(h, fairwayPolys, me, state.drive ?? DEFAULT_DRIVE_YD) : null);
   if (shownTarget) {
     const target = shownTarget;
     const m = measure(h, player, target);
@@ -502,7 +551,7 @@ function render() {
 
 /** Drive arcs (200-300 yd) on par 4s and 5s, from the tee or from you. Hidden in green view and close to the green. */
 function renderArcs(h: Hole, me: LngLat | null) {
-  const arcs = greenView || !state.hazards ? [] : distanceArcs(h, me);
+  const arcs = greenView || !state.hazards || editing ? [] : distanceArcs(h, me);
   (map.getSource('arcs') as GeoJSONSource | undefined)?.setData(turf.featureCollection(arcs.map((a) => turf.lineString(a.line, { color: a.color }))));
   arcLabels(arcs.map((a) => ({ at: a.label, offset: [a.side === 'R' ? 16 : -16, 0] as [number, number], html: `<span style="background:${a.color}">${a.yds}</span>` })));
 }
@@ -527,7 +576,7 @@ function usablePlayer(h: Hole): LngLat | null {
 }
 
 function renderHazards(h: Hole, me: LngLat | null) {
-  if (!course || !state.hazards || greenView) { hazardLabels([]); layupLabels([]); return; }
+  if (!course || !state.hazards || greenView || editing) { hazardLabels([]); layupLabels([]); return; }
   const hz = hazardNumbers(course, h, me);
   // Labels sit beside the hazard, away from the line of play (the map is turned so you face the green).
   hazardLabels(hz.map((z) => ({ at: z.at, extra: z.kind, offset: [z.side === 'L' ? -26 : z.side === 'R' ? 26 : 0, 0] as [number, number], html: `<b>${fmt(z.reach)}</b><i>${fmt(z.carry)}</i>` })));
@@ -614,7 +663,7 @@ function onPosition(p: LngLat, acc: number) {
   lastFixAt = Date.now();
   playerMarker.setLngLat(p).addTo(map);
   if (course) {
-    if (first && Date.now() - state.holeSetAt > ROUND_RESET_MS) {
+    if (first && !editing && Date.now() - state.holeSetAt > ROUND_RESET_MS) {
       const at = holeAtStart(course.holes, p);
       if (at != null) {
         goHole(at, false);
@@ -622,7 +671,7 @@ function onPosition(p: LngLat, acc: number) {
         return;
       }
     }
-    if (state.auto) {
+    if (state.auto && !editing) {
       const nxt = autoAdvance(course.holes, state.hole, p);
       if (nxt != null) return goHole(nxt, false);
     }
@@ -665,7 +714,7 @@ window.addEventListener('resize', () => {
 // ---------- Controls ----------
 $('prev').onclick = () => goHole(state.hole - 1, true);
 $('next').onclick = () => goHole(state.hole + 1, true);
-$('recenter').onclick = () => { const h = hole(); if (h) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); } };
+$('recenter').onclick = () => { if (editing) return editFrame(); const h = hole(); if (h) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); } };
 $('m-clear').onclick = () => { target = null; targetCleared = true; render(); };
 $('greenview').onclick = () => { const h = hole(); if (!h) return; greenView = !greenView; target = null; showHole(true); };
 $('fly').onclick = () => { if (flying) flying = false; else flyover(); };
@@ -707,6 +756,296 @@ $('holeinfo').onclick = () => {
   holePick.showModal();
 };
 
+
+// ---------- Course editor ----------
+// Mark tees, greens, doglegs, par and hazards on the satellite photo. Edits are kept per course on this
+// device (over the OSM data, which is never changed), and can be exported as a course file to build in.
+
+const HINTS: Record<Tool | 'none', string> = {
+  none: 'Pick what to mark. Tap a hazard you drew to delete it.',
+  tee: 'Tap where you tee off. Tap again to move it.',
+  green: 'Tap around the edge of the green, then Finish.',
+  dogleg: 'Tap the aiming point at the corner (up to 2). Clear for a straight hole.',
+  bunker: 'Tap around the edge of the bunker, then Finish.',
+  water: 'Tap around the edge of the water, then Finish.',
+};
+
+/** Your edits for the open course, starting from the built-in course file if there is one. */
+function myEdits(): CourseEdits {
+  const c = baseCourse!;
+  return store.getEdits(c.id) ?? structuredClone(bundledEdits(c.id)) ?? emptyEdits(c.id, c.name);
+}
+function commit(e: CourseEdits) {
+  e.updatedAt = Date.now();
+  store.saveEdits(e);
+  redraw();
+}
+
+function startEditing() {
+  if (!course || !baseCourse) return;
+  const ref = course.holes[state.hole]?.ref ?? 1;
+  editing = { ref, tool: null, pts: [], sel: null };
+  target = null;
+  greenView = false;
+  document.body.classList.add('editing');
+  map.doubleClickZoom.disable(); // quick taps around a green shouldn't zoom
+  $('editbar').hidden = false;
+  if (!state.satellite) { state.view = 'sat'; state.satellite = true; store.saveState(state); applyView(); }
+  map.resize();
+  editHole(ref);
+}
+
+function stopEditing() {
+  if (!editing) return;
+  const ref = editing.ref;
+  editing = null;
+  document.body.classList.remove('editing');
+  map.doubleClickZoom.enable();
+  $('editbar').hidden = true;
+  (map.getSource('edit') as GeoJSONSource).setData(turf.featureCollection([]));
+  map.resize();
+  redraw();
+  const i = course?.holes.findIndex((h) => h.ref === ref) ?? -1;
+  goHole(i >= 0 ? i : 0, true);
+}
+
+function editRefs() {
+  return baseCourse ? editableRefs(baseCourse, editsFor(baseCourse.id)) : [];
+}
+
+function editHole(ref: number) {
+  if (!editing || !course) return;
+  editing = { ref, tool: editing.tool, pts: [], sel: null };
+  const i = course.holes.findIndex((h) => h.ref === ref);
+  if (i >= 0) state.hole = i;
+  showHole(false);
+  editFrame();
+}
+
+/** Frames the hole being edited: the whole hole if it's mapped, else around the last green or the course. */
+function editFrame() {
+  if (!editing || !course) return;
+  userMoved = false;
+  const h = hole();
+  if (h) return fitHole(h);
+  const e = editsFor(course.id)?.holes[String(editing.ref)];
+  const prev = [...course.holes].reverse().find((x) => x.ref < editing!.ref) ?? course.holes[0];
+  const at = e?.tee ?? (e?.green && e.green[0]) ?? prev?.center;
+  if (at) map.jumpTo({ center: at, zoom: 17.3, bearing: 0, pitch: 0 });
+  else {
+    const [w, s2, e2, n] = course.bbox;
+    map.fitBounds([[w, s2], [e2, n]], { padding: 30, bearing: 0, pitch: 0, duration: 0 });
+  }
+}
+
+/** Zooms in on what you're about to mark: the tee or the green (if the hole has one yet). */
+function editFocus(tool: Tool) {
+  if (!editing || !course) return;
+  const h = hole();
+  const e = editsFor(course.id)?.holes[String(editing.ref)];
+  const at = tool === 'tee' ? e?.tee ?? h?.line[0] : tool === 'green' ? h?.center ?? (e?.green && e.green[0]) : null;
+  if (!at) return;
+  userMoved = true;
+  // Keep it above the edit bar.
+  const bar = $('editbar').getBoundingClientRect();
+  const box = map.getContainer().getBoundingClientRect();
+  const offset: [number, number] = wide() ? [-Math.max(0, box.right - bar.left) / 2, 0] : [0, -Math.max(0, box.bottom - bar.top) / 2];
+  map.easeTo({ center: at, zoom: Math.max(map.getZoom(), tool === 'tee' ? 18.5 : 19.3), pitch: 0, offset, duration: 600 });
+}
+
+function editTap(p: LngLat, pt: maplibregl.Point) {
+  if (!editing || !baseCourse) return;
+  p = roundPt(p);
+  const { tool, ref } = editing;
+  if (!tool) {
+    // Select a hazard you drew (to delete it).
+    const hit = map.queryRenderedFeatures([[pt.x - 8, pt.y - 8], [pt.x + 8, pt.y + 8]], { layers: ['bunker', 'water'] }).find((f) => f.properties?.hid);
+    editing.sel = (hit?.properties?.hid as string) ?? null;
+    return drawEdit();
+  }
+  if (tool === 'green' || tool === 'bunker' || tool === 'water') {
+    editing.pts.push(p);
+    return drawEdit();
+  }
+  const e = myEdits();
+  const h = (e.holes[String(ref)] ??= {});
+  if (tool === 'tee') h.tee = p;
+  if (tool === 'dogleg') h.dogleg = [...(h.dogleg ?? []).slice(-1), p];
+  commit(e);
+}
+
+function editFinish() {
+  if (!editing?.tool || editing.pts.length < 3) return;
+  const ring = closeRing(editing.pts);
+  const e = myEdits();
+  if (editing.tool === 'green') {
+    (e.holes[String(editing.ref)] ??= {}).green = ring;
+    editing.tool = null; // one green per hole
+  } else {
+    e.hazards.push({ id: Math.random().toString(36).slice(2, 10), kind: editing.tool as 'bunker' | 'water', ring });
+  }
+  editing.pts = [];
+  commit(e);
+}
+
+function editClear() {
+  if (!editing) return;
+  if (editing.pts.length) { editing.pts = []; return drawEdit(); }
+  const e = myEdits();
+  if (editing.sel) {
+    e.hazards = e.hazards.filter((z) => z.id !== editing!.sel);
+    editing.sel = null;
+    return commit(e);
+  }
+  const h = e.holes[String(editing.ref)];
+  if (!h) return;
+  if (editing.tool === 'tee') delete h.tee;
+  else if (editing.tool === 'green') delete h.green;
+  else if (editing.tool === 'dogleg') h.dogleg = [];
+  else return;
+  commit(e);
+}
+
+function setPar(par: number) {
+  if (!editing) return;
+  const e = myEdits();
+  (e.holes[String(editing.ref)] ??= {}).par = par;
+  commit(e);
+}
+
+/** The editor's own drawing (tee, doglegs, the shape in progress) and the edit bar's state. */
+function drawEdit() {
+  if (!editing || !course) return;
+  const { ref, tool, pts, sel } = editing;
+  const e = editsFor(course.id)?.holes[String(ref)];
+  const h = course.holes.find((x) => x.ref === ref);
+  const fs: GeoJSON.Feature[] = [];
+  const tee = e?.tee ?? h?.line[0];
+  if (h) fs.push(turf.lineString(h.line, { kind: 'line' }));
+  if (h?.green) fs.push(turf.polygon([h.green], { kind: 'green' }));
+  else if (e?.green && e.green.length >= 4) fs.push(turf.polygon([e.green], { kind: 'green' }));
+  for (const d of h ? h.line.slice(1, -1) : e?.dogleg ?? []) fs.push(turf.point(d, { kind: 'dogleg' }));
+  if (tee) fs.push(turf.point(tee, { kind: 'tee' }));
+  for (const z of editsFor(course.id)?.hazards ?? []) if (z.ring.length >= 4) fs.push(turf.polygon([z.ring], { kind: z.kind, sel: z.id === sel }));
+  if (pts.length >= 3) fs.push(turf.polygon([closeRing(pts)], { kind: tool, drawing: true }));
+  else if (pts.length === 2) fs.push(turf.lineString(pts, { kind: tool, drawing: true }));
+  for (const q of pts) fs.push(turf.point(q, { kind: 'vertex' }));
+  (map.getSource('edit') as GeoJSONSource).setData(turf.featureCollection(fs));
+
+  $('e-ref').textContent = String(ref);
+  const par = e?.par ?? h?.par;
+  document.querySelectorAll<HTMLButtonElement>('#e-par button').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.par) === par)));
+  document.querySelectorAll<HTMLButtonElement>('.e-tools button').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.tool === tool));
+    const t = b.dataset.tool;
+    b.classList.toggle('has', (t === 'tee' && !!tee) || (t === 'green' && !!(h?.green || e?.green)) || (t === 'dogleg' && !!h && h.line.length > 2));
+  });
+  const drawing = tool === 'green' || tool === 'bunker' || tool === 'water';
+  const missing = [!tee && 'tee', !(h?.green || e?.green) && 'green', !par && 'par'].filter(Boolean).join(', ');
+  let hint = sel ? 'Hazard selected. Clear deletes it.' : HINTS[tool ?? 'none'];
+  if (drawing && pts.length) hint = `${pts.length} point${pts.length > 1 ? 's' : ''}. ${pts.length < 3 ? 'Keep tapping around the edge.' : 'Finish when you’re back at the start.'}`;
+  if (!tool && !sel && missing) hint = `Hole ${ref} still needs: ${missing}.`;
+  $('e-hint').textContent = hint;
+  $<HTMLButtonElement>('e-undo').hidden = !(drawing && pts.length);
+  $<HTMLButtonElement>('e-finish').hidden = !drawing;
+  $<HTMLButtonElement>('e-finish').disabled = pts.length < 3;
+  $<HTMLButtonElement>('e-clear').hidden = !(pts.length || sel || (tool && tool !== 'bunker' && tool !== 'water'));
+  $('e-clear').textContent = sel ? 'Delete' : pts.length ? 'Start over' : 'Clear';
+}
+
+$('e-prev').onclick = () => { const r = editRefs(); const i = r.indexOf(editing?.ref ?? 1); editHole(r[Math.max(0, i - 1)]); };
+$('e-next').onclick = () => { const r = editRefs(); const i = r.indexOf(editing?.ref ?? 1); editHole(r[Math.min(r.length - 1, i + 1)]); };
+$('e-done').onclick = () => stopEditing();
+$('e-undo').onclick = () => { if (editing) { editing.pts.pop(); drawEdit(); } };
+$('e-finish').onclick = () => editFinish();
+$('e-clear').onclick = () => editClear();
+document.querySelectorAll<HTMLButtonElement>('#e-par button').forEach((b) => (b.onclick = () => setPar(Number(b.dataset.par))));
+document.querySelectorAll<HTMLButtonElement>('.e-tools button').forEach((b) => (b.onclick = () => {
+  if (!editing) return;
+  const t = b.dataset.tool as Tool;
+  editing.tool = editing.tool === t ? null : t;
+  editing.pts = [];
+  editing.sel = null;
+  drawEdit();
+  if (editing.tool) editFocus(editing.tool);
+}));
+
+/** A file name for the course file, e.g. westbrook-village-lakes.json. */
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'course';
+
+async function exportEdits() {
+  if (!baseCourse) return msg('Open a course first.');
+  const e = editsFor(baseCourse.id);
+  if (!e) return msg('Nothing to export yet: use Edit course map first.');
+  const name = BUILTIN.find((b) => b.id === baseCourse!.id)?.name ?? baseCourse.name;
+  const file = new File([JSON.stringify({ ...e, name }, null, 1)], `${slug(name)}.json`, { type: 'application/json' });
+  try {
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file);
+  a.download = file.name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+$('edit-course').onclick = () => { if (!course) return msg('Open a course first.'); sheet.close(); startEditing(); };
+$('export-edits').onclick = () => exportEdits();
+$('import-edits').onclick = () => $<HTMLInputElement>('import-file').click();
+$<HTMLInputElement>('import-file').onchange = async (ev) => {
+  const f = (ev.target as HTMLInputElement).files?.[0];
+  (ev.target as HTMLInputElement).value = '';
+  if (!f) return;
+  try {
+    const e = parseEditsFile(await f.text());
+    store.saveEdits(e);
+    if (baseCourse?.id === e.courseId) { redraw(); msg(`Imported ${e.name}.`); }
+    else msg(`Imported ${e.name}. Open that course to use it.`);
+    renderEditStatus();
+  } catch (err) {
+    msg((err as Error).message);
+  }
+};
+$('discard-edits').onclick = () => {
+  if (!baseCourse || !store.getEdits(baseCourse.id)) return msg('No changes on this device for this course.');
+  if (!window.confirm(`Discard your map changes for ${baseCourse.name} on this device?${bundledEdits(baseCourse.id) ? '\n\nThe built-in course file stays.' : ''}`)) return;
+  store.deleteEdits(baseCourse.id);
+  redraw();
+  renderEditStatus();
+  msg('Changes discarded.');
+};
+
+/** "12 of 18 holes mapped · yours, not exported" in the Courses sheet. */
+function renderEditStatus() {
+  const el2 = $('edit-status');
+  if (!course || !baseCourse) { el2.textContent = 'Open a course, then mark its tees, greens and hazards on the satellite photo.'; return; }
+  const mine = store.getEdits(baseCourse.id);
+  const built = bundledEdits(baseCourse.id);
+  const p = progressOf(course, editRefs());
+  const src = mine ? 'Your changes are saved on this device. Export the course file to build them into the app.' : built ? 'Using the course file built into the app.' : 'Using OpenStreetMap data only.';
+  el2.textContent = `${p.done} of ${p.total} holes have a green. ${src}`;
+}
+
+function renderBuiltin() {
+  const ul = $('builtin');
+  ul.innerHTML = '';
+  for (const b of BUILTIN) {
+    const li = document.createElement('li');
+    const go = document.createElement('button');
+    go.className = 'go';
+    const file = bundledEdits(b.id);
+    const mine = store.getEdits(b.id);
+    const n = Object.values((mine ?? file)?.holes ?? {}).filter((h) => h.green).length;
+    const greens = `${n} green${n === 1 ? '' : 's'}`;
+    go.innerHTML = `${esc(b.name)}<small>${mine ? `Your map: ${greens}` : file ? `Built-in map: ${greens}` : 'Not mapped yet'}</small>`;
+    go.onclick = () => openCourse({ id: b.id, name: b.name, center: b.center });
+    li.append(go);
+    ul.appendChild(li);
+  }
+}
+
 // ---------- Course sheet ----------
 const sheet = $<HTMLDialogElement>('sheet');
 /** Message line in the Courses sheet, optionally with a button (e.g. Try again). */
@@ -726,6 +1065,8 @@ $('coursename').onclick = openSheet;
 
 function openSheet() {
   renderSaved();
+  renderBuiltin();
+  renderEditStatus();
   $<HTMLInputElement>('sat').checked = state.satellite;
   $<HTMLInputElement>('sim').checked = sim;
   $<HTMLInputElement>('hazards').checked = state.hazards !== false;
@@ -769,7 +1110,7 @@ function renderResults(hits: CourseHit[]) {
 
 async function openCourse(h: CourseHit, force = false) {
   const cached = !force && store.getCourse(h.id);
-  if (cached) { setCourse(cached); sheet.close(); return; }
+  if (cached) { setCourse(cached); sheet.close(); if (!course?.holes.length) startEditing(); return; }
   msg(`Loading ${h.name} from OpenStreetMap…`);
   setButtonsBusy(true);
   progress(0, 'Starting');
@@ -780,10 +1121,12 @@ async function openCourse(h: CourseHit, force = false) {
     stepProgress(progress, 'scenery');
     await nextFrame();
     setCourse(c);
-    progress(1, `Loaded ${c.holes.length} holes`);
-    msg(`Loaded ${c.holes.length} holes. Saved for offline.`);
-    await new Promise((r) => setTimeout(r, 500)); // let the full bar show for a moment
+    const n = course?.holes.length ?? 0;
+    progress(1, `Loaded ${n} holes`);
+    msg(n ? `Loaded ${n} holes. Saved for offline.` : 'No holes are mapped for this course yet. Opening the editor so you can map it.');
+    await new Promise((r) => setTimeout(r, n ? 500 : 1500)); // let the full bar show for a moment
     sheet.close();
+    if (!n) startEditing();
   } catch (e) {
     msg(`Couldn't load ${h.name}. ${(e as Error).message}`, { label: 'Try again', run: () => openCourse(h, force) });
   } finally {
@@ -995,4 +1338,4 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 }
 
 // For tests / debugging in the console.
-(window as any).golf = { map, goHole, get course() { return course; }, get state() { return state; }, get round() { return round; }, get target() { return target; }, onPosition, setCourse };
+(window as any).golf = { map, goHole, get course() { return course; }, get state() { return state; }, get round() { return round; }, get target() { return target; }, onPosition, setCourse, startEditing, stopEditing, get editing() { return editing; } };

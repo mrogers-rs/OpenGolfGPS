@@ -55,6 +55,30 @@
           <button id="fly" class="pill" aria-label="Fly over the hole">Fly</button>
         </div>
         <div id="greeninfo" hidden></div>
+        <div id="editbar" hidden>
+          <div class="e-row e-hole">
+            <button id="e-prev" class="nav" aria-label="Previous hole">‹</button>
+            <span class="e-title">HOLE <b id="e-ref">1</b></span>
+            <button id="e-next" class="nav" aria-label="Next hole">›</button>
+            <span class="e-par" id="e-par" role="group" aria-label="Par"><span class="e-title">PAR</span><button data-par="3">3</button><button data-par="4">4</button><button data-par="5">5</button></span>
+          </div>
+          <div class="e-row e-tools" role="group" aria-label="What to mark">
+            <button data-tool="tee">Tee</button>
+            <button data-tool="green">Green</button>
+            <button data-tool="dogleg">Dogleg</button>
+            <button data-tool="bunker">Bunker</button>
+            <button data-tool="water">Water</button>
+          </div>
+          <div class="e-row e-hint">
+            <span id="e-hint"></span>
+            <span class="e-acts">
+              <button id="e-undo">Undo</button>
+              <button id="e-finish" class="e-ok">Finish</button>
+              <button id="e-clear" class="danger">Clear</button>
+              <button id="e-done" class="e-done">Done</button>
+            </span>
+          </div>
+        </div>
       </main>
 
       <nav id="tabs">
@@ -73,6 +97,8 @@
         <button id="near">Courses near me</button>
         <button id="test-course">Auburn GC (test)</button>
       </div>
+      <h3>Built-in courses</h3>
+      <ul id="builtin" class="list"></ul>
       <p id="msg" class="msg"></p>
       <div id="loadbar" class="loadbar" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="track"><i></i></div><div class="lbl"><span></span><b></b></div></div>
       <ul id="results" class="list"></ul>
@@ -82,6 +108,17 @@
       <div class="row">
         <button id="dl-tiles">Download map for offline</button>
         <button id="refresh">Refresh course data</button>
+      </div>
+      <h3>Map this course yourself</h3>
+      <p class="fine" id="edit-status">Mark tees, greens and hazards on the satellite photo. Changes stay on this device until you export them.</p>
+      <div class="row">
+        <button id="edit-course">Edit course map</button>
+        <button id="export-edits">Export course file</button>
+      </div>
+      <div class="row">
+        <button id="import-edits">Import course file</button>
+        <button id="discard-edits" class="danger">Discard my changes</button>
+        <input id="import-file" type="file" accept=".json,application/json" hidden />
       </div>
       <h3>Settings</h3>
       <label class="check"><input type="checkbox" id="sat" /> Satellite imagery</label>
