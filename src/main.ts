@@ -6,7 +6,7 @@ import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { scenery3d } from './scenery3d.ts';
-import { loadCourse, searchCourses, coursesNear, type CourseHit } from './overpass.ts';
+import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
@@ -231,33 +231,64 @@ function showHole(fit: boolean) {
 }
 
 /** Tee at the bottom, green at the top. Includes you if you're on this hole. */
+/** True when the map is wider than tall: holes then run left to right instead of bottom to top. */
+function wide() {
+  const { clientWidth: w, clientHeight: h } = map.getContainer();
+  return w > h * 1.05;
+}
+
+/** Map bearing that puts `from -> to` pointing up the screen (portrait) or to the right (landscape). */
+function playBearing(from: LngLat, to: LngLat) {
+  const b = turf.bearing(from, to);
+  return wide() ? b - 90 : b;
+}
+
+/** Room the overlays (hole card, tool buttons, shot bar) leave for the hole. */
+function fitPadding() {
+  return wide() ? { top: 118, bottom: 56, left: 24, right: 76 } : { top: 124, bottom: 52, left: 24, right: 72 };
+}
+
+/** Hole view: tee to green filling the screen, running up (portrait) or across (landscape). */
+const TILT = 50;
+const TILT_WIDE = 32;
 function fitHole(h: Hole) {
   const pts: LngLat[] = [...h.line, ...(h.green ?? [])];
   if (player && turf.distance(player, h.center, { units: 'meters' }) < 640) pts.push(player);
-  const bearing = turf.bearing(h.line[0], h.center);
-  const cam = map.cameraForBounds(turf.bbox(turf.multiPoint(pts)) as [number, number, number, number], { bearing, padding: { top: 110, bottom: 30, left: 50, right: 50 }, maxZoom: 19 });
-  if (!cam) return;
-  map.jumpTo({ ...cam, bearing, pitch: 0 });
-  if (state.view === '3d' && !greenView) tiltToFit(pts);
+  const bearing = playBearing(h.line[0], h.center);
+  const pitch = state.view === '3d' && !greenView ? (wide() ? TILT_WIDE : TILT) : 0;
+  fitPoints(pts, bearing, pitch, fitPadding(), 19);
 }
 
-/** Tilt the camera (as if standing behind the tee) and zoom/pan until every point is on screen. */
-const TILT = 50;
-function tiltToFit(pts: LngLat[]) {
-  map.jumpTo({ pitch: TILT });
-  const pad = { top: 110, bottom: 70, left: 40, right: 80 };
+/**
+ * Rotates to `bearing`, tilts to `pitch`, then zooms and pans until the points just fill the padded screen.
+ * (cameraForBounds fits the north-up box around the points, which leaves a rotated hole small.)
+ */
+function fitPoints(pts: LngLat[], bearing: number, pitch: number, pad: { top: number; bottom: number; left: number; right: number }, maxZoom: number) {
   const { clientWidth: w, clientHeight: hgt } = map.getContainer();
-  for (let i = 0; i < 25; i++) {
+  const availW = Math.max(40, w - pad.left - pad.right);
+  const availH = Math.max(40, hgt - pad.top - pad.bottom);
+  const c = turf.center(turf.multiPoint(pts)).geometry.coordinates as LngLat;
+  map.jumpTo({ center: c, bearing, pitch, zoom: Math.min(map.getZoom() || 16, maxZoom) });
+  for (let i = 0; i < 12; i++) {
     const xy = pts.map((p) => map.project(p));
     const minX = Math.min(...xy.map((q) => q.x)), maxX = Math.max(...xy.map((q) => q.x));
     const minY = Math.min(...xy.map((q) => q.y)), maxY = Math.max(...xy.map((q) => q.y));
-    // Center the points in the padded area.
-    const dx = (minX + maxX) / 2 - (pad.left + (w - pad.right)) / 2;
-    const dy = (minY + maxY) / 2 - (pad.top + (hgt - pad.bottom)) / 2;
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) map.jumpTo({ center: map.unproject([w / 2 + dx, hgt / 2 + dy]) });
-    const fits = maxX - minX <= w - pad.left - pad.right && maxY - minY <= hgt - pad.top - pad.bottom;
-    if (fits && Math.abs(dx) <= 1 && Math.abs(dy) <= 1) break;
-    if (!fits) map.jumpTo({ zoom: map.getZoom() - 0.12 });
+    const ratio = Math.min(availW / Math.max(1, maxX - minX), availH / Math.max(1, maxY - minY));
+    const dx = (minX + maxX) / 2 - (pad.left + availW / 2);
+    const dy = (minY + maxY) / 2 - (pad.top + availH / 2);
+    // Ease in when tilted: the far end shrinks as you zoom, so a full step overshoots.
+    const step = Math.log2(ratio) * (pitch ? 0.8 : 1);
+    const zoom = Math.min(maxZoom, map.getZoom() + step);
+    const center = map.unproject([w / 2 + dx, hgt / 2 + dy]);
+    map.jumpTo({ center, zoom });
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && (Math.abs(step) < 0.01 || (zoom >= maxZoom && ratio >= 1))) break;
+  }
+  // Never leave anything cut off: back out a little at a time if the last step overshot.
+  for (let i = 0; i < 10; i++) {
+    const xy = pts.map((p) => map.project(p));
+    const off = xy.some((q) => q.x < pad.left - 1 || q.x > w - pad.right + 1 || q.y < pad.top - 1 || q.y > hgt - pad.bottom + 1);
+    if (!off) break;
+    map.jumpTo({ zoom: map.getZoom() - 0.05 });
   }
 }
 
@@ -265,10 +296,9 @@ function tiltToFit(pts: LngLat[]) {
 function fitGreen(h: Hole) {
   const ring = h.green ?? [h.center];
   const from = usablePlayer(h) ?? h.line[Math.max(0, h.line.length - 2)];
-  const bearing = turf.bearing(from, h.center);
-  const box = turf.bbox(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as [number, number, number, number];
-  const cam = map.cameraForBounds(box, { bearing, padding: { top: 70, bottom: 40, left: 40, right: 70 }, maxZoom: 21 });
-  if (cam) map.jumpTo({ ...cam, bearing, pitch: 0 });
+  const bearing = playBearing(from, h.center);
+  const pts = turf.coordAll(turf.buffer(turf.multiPoint(ring), 6, { units: 'meters' })!) as LngLat[];
+  fitPoints(pts, bearing, 0, wide() ? { top: 70, bottom: 40, left: 40, right: 80 } : { top: 70, bottom: 40, left: 40, right: 70 }, 21);
 }
 
 // ---------- Flyover ----------
@@ -503,7 +533,7 @@ document.addEventListener('visibilitychange', () => (document.visibilityState ==
 let resizeTimer = 0;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = window.setTimeout(() => { const h = hole(); if (h) fitHole(h); }, 250);
+  resizeTimer = window.setTimeout(() => { const h = hole(); if (h && !flying) greenView ? fitGreen(h) : fitHole(h); }, 250);
 });
 
 // ---------- Controls ----------
@@ -564,7 +594,18 @@ $('holeinfo').onclick = () => {
 
 // ---------- Course sheet ----------
 const sheet = $<HTMLDialogElement>('sheet');
-const msg = (t: string) => ($('msg').textContent = t);
+/** Message line in the Courses sheet, optionally with a button (e.g. Try again). */
+function msg(t: string, action?: { label: string; run: () => void }) {
+  const el = $('msg');
+  el.textContent = t;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'retry';
+    b.textContent = action.label;
+    b.onclick = action.run;
+    el.append(' ', b);
+  }
+}
 $('menu').onclick = openSheet;
 $('coursename').onclick = openSheet;
 
@@ -614,15 +655,46 @@ async function openCourse(h: CourseHit, force = false) {
   const cached = !force && store.getCourse(h.id);
   if (cached) { setCourse(cached); sheet.close(); return; }
   msg(`Loading ${h.name} from OpenStreetMap…`);
+  setButtonsBusy(true);
+  progress(0, 'Starting');
   try {
-    const c = await loadCourse(h.id, h.name);
+    const c = await loadCourse(h.id, h.name, progress);
+    stepProgress(progress, 'save');
     store.saveCourse(c);
+    stepProgress(progress, 'scenery');
+    await nextFrame();
     setCourse(c);
+    progress(1, `Loaded ${c.holes.length} holes`);
     msg(`Loaded ${c.holes.length} holes. Saved for offline.`);
+    await new Promise((r) => setTimeout(r, 500)); // let the full bar show for a moment
     sheet.close();
   } catch (e) {
-    msg(`Couldn't load: ${(e as Error).message}`);
+    msg(`Couldn't load ${h.name}. ${(e as Error).message}`, { label: 'Try again', run: () => openCourse(h, force) });
+  } finally {
+    progress(null);
+    setButtonsBusy(false);
   }
+}
+
+/** The loading bar in the Courses sheet. `null` hides it. */
+function progress(frac: number | null, label = '') {
+  const bar = $('loadbar');
+  bar.hidden = frac == null;
+  if (frac == null) return;
+  const pctDone = Math.round(frac * 100);
+  // Never go backwards (e.g. a slower server's bytes after a faster one's).
+  const prev = Number(bar.getAttribute('aria-valuenow') ?? 0);
+  const shown = frac === 0 ? 0 : Math.max(prev, pctDone);
+  bar.setAttribute('aria-valuenow', String(shown));
+  bar.querySelector<HTMLElement>('i')!.style.width = shown + '%';
+  bar.querySelector('span')!.textContent = label;
+  bar.querySelector('b')!.textContent = shown + '%';
+}
+
+/** Course buttons do nothing while a load is running, so you can't start two at once. */
+function setButtonsBusy(on: boolean) {
+  for (const id of ['search', 'near', 'test-course', 'refresh', 'dl-tiles', 'reset']) $<HTMLButtonElement>(id).disabled = on;
+  document.querySelectorAll<HTMLButtonElement>('#results button, #saved button').forEach((b) => (b.disabled = on));
 }
 
 $('search').onclick = async () => {
@@ -648,7 +720,7 @@ $('near').onclick = () => {
       renderResults(hits);
       msg(hits.length ? '' : 'No courses within 25 km.');
     } catch (e) {
-      msg((e as Error).message);
+      msg((e as Error).message, { label: 'Try again', run: () => $('near').click() });
     }
   };
   if (player) return go(player);
@@ -663,12 +735,39 @@ $('dl-tiles').onclick = async () => {
   const btn = $<HTMLButtonElement>('dl-tiles');
   btn.disabled = true;
   try {
-    const r = await prefetchTiles(course.bbox, (d, t) => msg(`Downloading map… ${d}/${t}`));
+    progress(0, 'Downloading map');
+    const r = await prefetchTiles(course.bbox, (d, t) => { msg(''); progress(d / t, `Downloading map ${d}/${t} tiles`); });
+    progress(null);
     msg(r.failed ? `Saved ${r.total - r.failed}/${r.total} tiles (${r.failed} failed, try again on better signal).` : `Map saved for offline (${r.total} tiles).`);
   } finally {
+    progress(null);
     btn.disabled = false;
   }
 };
+
+// Wipes everything this app keeps on the device, then reloads a fresh copy.
+$('reset').onclick = async () => {
+  if (!window.confirm('Clear everything and reset the app?\n\nThis deletes saved courses, offline maps, all rounds and scores, and settings on this device. It cannot be undone.')) return;
+  msg('Clearing…');
+  await resetApp();
+  location.reload();
+};
+
+async function resetApp() {
+  try { localStorage.clear(); } catch { /* ignore */ }
+  try { sessionStorage.clear(); } catch { /* ignore */ }
+  // The app sets no cookies, but clear any this site has anyway.
+  for (const c of document.cookie.split(';')) {
+    const name = c.split('=')[0].trim();
+    if (name) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+  try {
+    if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
+  } catch { /* ignore */ }
+  try {
+    if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+  } catch { /* ignore */ }
+}
 
 $<HTMLInputElement>('sat').onchange = (e) => setView((e.target as HTMLInputElement).checked ? 'sat' : '3d');
 // Cycles 3D -> 2D -> Sat.
@@ -745,4 +844,4 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 }
 
 // For tests / debugging in the console.
-(window as any).golf = { map, get course() { return course; }, get state() { return state; }, get round() { return round; }, onPosition, setCourse };
+(window as any).golf = { map, goHole, get course() { return course; }, get state() { return state; }, get round() { return round; }, onPosition, setCourse };

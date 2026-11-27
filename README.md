@@ -57,6 +57,20 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
   are re-fetched quietly the next time they're opened online (`COURSE_DATA_VERSION` in `src/course.ts`).
 - **Offline** (`public/sw.js`): app shell precached on first visit; satellite tiles cached as viewed, and
   "Download map for offline" prefetches the course area (zoom 14–19).
+- **Reliable course loading**: course data comes from Overpass (four mirrors, staggered) *or* the main
+  OpenStreetMap API (`src/osmapi.ts`, `map.json` for the course box, split into quarters if too big, converted to
+  Overpass shape). If the preferred source hasn't answered in 12 s, or fails, the other is asked too; first good
+  answer wins and is preferred next time. "Courses near me" falls back to a bounded Nominatim search the same way.
+  Failures show one plain message with a Try again button.
+- **Hole view orientation**: each hole is rotated so it runs bottom to top when the map is taller than wide
+  (portrait) and left to right when wider (landscape), and zoomed so tee to green fills the screen around the
+  overlays (`fitPoints` in `src/main.ts`; turning the device re-fits). Landscape uses a gentler 3D tilt and a
+  narrower yardage column; phones on their side get a compact header, numbers and a one-row tab bar.
+- **Loading bar**: opening or refreshing a course shows a progress bar through each stage (find the course,
+  download, build holes, save, build 3D scenery). Overpass sends no size, so the download stage eases toward
+  its end by bytes received. Offline map downloads use the same bar.
+- **Clear cache and reset app** (Menu → Reset): after a confirm, clears localStorage (courses, rounds,
+  settings), all Cache Storage (offline maps, app shell), any cookies, and the service worker, then reloads.
 - **Wake lock**: Screen Wake Lock API, re-acquired when you return to the app.
 
 Course data © OpenStreetMap contributors (ODbL). Imagery © Esri and partners.
