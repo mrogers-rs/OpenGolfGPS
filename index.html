@@ -21,15 +21,23 @@
       </div>
       <div id="pace" hidden></div>
 
-      <div id="holecard">
-        <button id="prev" class="nav" aria-label="Previous hole">‹</button>
-        <button id="holeinfo" aria-label="Pick hole">
-          <span class="hl">HOLE</span>
-          <span id="holeno">–</span>
-          <span id="holemeta"></span>
-        </button>
-        <button id="next" class="nav" aria-label="Next hole">›</button>
-        <button id="auto" aria-pressed="true" title="Auto-advance to the next hole">AUTO</button>
+      <div id="top">
+        <div id="holecard">
+          <button id="prev" class="nav" aria-label="Previous hole">‹</button>
+          <button id="holeinfo" aria-label="Pick hole">
+            <span class="hl">HOLE</span>
+            <span id="holeno">–</span>
+            <span id="holemeta"></span>
+          </button>
+          <button id="next" class="nav" aria-label="Next hole">›</button>
+          <button id="auto" aria-pressed="true" title="Auto-advance to the next hole">AUTO</button>
+        </div>
+        <footer id="nums">
+          <div class="num side"><span class="lbl">FRONT</span><b id="front">–</b></div>
+          <div class="num mid"><span class="lbl" id="centerlbl">CENTER</span><b id="center">–</b></div>
+          <div class="num side"><span class="lbl">BACK</span><b id="back">–</b></div>
+          <div id="status"><span id="gps">GPS off</span><span id="wake"></span></div>
+        </footer>
       </div>
 
       <main id="mapwrap">
@@ -44,21 +52,9 @@
           <button id="fly" class="pill" aria-label="Fly over the hole">Fly</button>
         </div>
         <div id="greeninfo" hidden></div>
-        <div id="shotbar">
-          <span id="shotinfo"></span>
-          <button id="shot-undo" class="pill" hidden aria-label="Undo last shot mark">Undo</button>
-        </div>
       </main>
 
-      <footer id="nums">
-        <div class="num side"><span class="lbl">FRONT</span><b id="front">–</b></div>
-        <div class="num mid"><span class="lbl" id="centerlbl">CENTER</span><b id="center">–</b></div>
-        <div class="num side"><span class="lbl">BACK</span><b id="back">–</b></div>
-        <div id="status"><span id="gps">GPS off</span><span id="wake"></span></div>
-      </footer>
-
       <nav id="tabs">
-        <button id="shot" class="tab"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg><span>Mark shot</span></button>
         <button id="greenview" class="tab" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="16" rx="9" ry="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 16V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 3.5l6 2.3-6 2.3z" fill="currentColor"/></svg><span>Green</span></button>
         <button id="card" class="tab"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span id="cardlbl">Card</span></button>
         <button id="menu" class="tab" aria-label="Courses and settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Menu</span></button>
@@ -117,7 +113,6 @@
         <div id="c-fw-row"><span class="lbl">FAIRWAY</span><div id="c-fw" class="chips"></div></div>
         <span class="lbl">PENALTIES</span><div id="c-pen" class="chips"></div>
         <div id="c-sand" class="chips"></div>
-        <p id="c-shots" class="fine"></p>
       </div>
       <h3>Scorecard · <span id="c-score"></span></h3>
       <table class="card"><thead><tr><th>Hole</th><th>Par</th><th>Score</th><th>Putts</th><th>FW</th><th>GIR</th></tr></thead><tbody id="c-table"></tbody></table>

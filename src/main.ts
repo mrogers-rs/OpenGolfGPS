@@ -13,7 +13,7 @@ import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
 import { hazardNumbers } from './hazards.ts';
-import { type Round, newRound, markShot, undoShot, shotDistances, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
+import { type Round, newRound, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
 import { initCard, renderCard } from './card.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 
@@ -55,7 +55,6 @@ const map = new maplibregl.Map({
       course: { type: 'geojson', data: turf.featureCollection([]), attribution: '© OpenStreetMap contributors' },
       hole: { type: 'geojson', data: turf.featureCollection([]) },
       measure: { type: 'geojson', data: turf.featureCollection([]) },
-      shots: { type: 'geojson', data: turf.featureCollection([]) },
       scenery3d: { type: 'geojson', data: turf.featureCollection([]) },
       cutout: { type: 'geojson', data: turf.featureCollection([]) },
       pinline: { type: 'geojson', data: turf.featureCollection([]) },
@@ -94,8 +93,6 @@ const map = new maplibregl.Map({
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
       { id: 'arcs', type: 'line', source: 'arcs', layout: { 'line-cap': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 2.5, 'line-opacity': 0.9 } },
       { id: 'hole-line', type: 'line', source: 'hole', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 2] } },
-      { id: 'shot-line', type: 'line', source: 'shots', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ff7a1a', 'line-width': 2.5 } },
-      { id: 'shot-pt', type: 'circle', source: 'shots', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#ff7a1a', 'circle-stroke-color': '#000', 'circle-stroke-width': 1.5 } },
       { id: 'pinline', type: 'line', source: 'pinline', layout: { 'line-cap': 'round' }, paint: { 'line-color': '#fff', 'line-width': 2.5, 'line-opacity': 0.95 } },
       // Tap-to-measure: thick legs (you -> target in yellow, target -> pin in white) on a dark casing.
       { id: 'measure-casing', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.55 } },
@@ -295,7 +292,7 @@ function playBearing(from: LngLat, to: LngLat) {
   return b - (90 - up);
 }
 
-/** Room the overlays (hole card, tool buttons, shot bar) leave for the hole. */
+/** Room the overlays (hole card, tool buttons, yardage card) leave for the hole. */
 function fitPadding() {
   // Generous margins so the hole sits clear of the hole card, tool buttons and screen edges.
   // Measured from the overlays, since they grow on big screens.
@@ -449,7 +446,6 @@ function render() {
   renderHazards(h, me);
   renderArcs(h, me);
   renderGreenInfo(h, n.frontPt, n.backPt);
-  renderShots(h);
   renderPace();
 
   // Your crosshair if you placed one, else the default drive spot from the tee (par 4/5) unless you cleared it.
@@ -529,26 +525,6 @@ function renderGreenInfo(h: Hole, frontPt: LngLat, backPt: LngLat) {
   } else {
     box.innerHTML = `Depth <b>${fmt(depth)}</b><br><small>Tap the green to set today's pin</small>`;
   }
-}
-
-function renderShots(h: Hole) {
-  const s = round?.holes[h.ref];
-  const shots = s?.shots ?? [];
-  const fc: GeoJSON.Feature[] = shots.map((p) => turf.point(p.at));
-  if (shots.length > 1) fc.push(turf.lineString(shots.map((p) => p.at)));
-  const me = usablePlayer(h);
-  const last = shots[shots.length - 1];
-  // Live: from your last mark to where you are now (walking to the ball).
-  if (last && me) fc.push(turf.lineString([last.at, me]));
-  (map.getSource('shots') as GeoJSONSource | undefined)?.setData(turf.featureCollection(fc));
-  const d = shotDistances(s);
-  const info = $('shotinfo');
-  if (last && me && (yd(last.at, me) >= 5 || !d.length)) info.innerHTML = `Shot ${shots.length}: <b>${fmt(yd(last.at, me))}</b> yd`;
-  else if (d.length) info.innerHTML = `Last shot <b>${fmt(d[d.length - 1])}</b> yd`;
-  else info.textContent = me ? '' : 'Shot tracking needs GPS on this hole';
-  $('shot-undo').hidden = !shots.length;
-  $<HTMLButtonElement>('shot').disabled = !me;
-  $('shot').querySelector('span')!.textContent = shots.length ? `Shot ${shots.length + 1}` : 'Tee shot';
 }
 
 function renderPace() {
@@ -667,17 +643,6 @@ $('recenter').onclick = () => { const h = hole(); if (h) { userMoved = false; gr
 $('m-clear').onclick = () => { target = null; targetCleared = true; render(); };
 $('greenview').onclick = () => { const h = hole(); if (!h) return; greenView = !greenView; target = null; showHole(true); };
 $('fly').onclick = () => { if (flying) flying = false; else flyover(); };
-$('shot').onclick = () => {
-  const h = hole();
-  if (!h) return;
-  const me = usablePlayer(h);
-  if (!me) return;
-  const r = getRound(true)!;
-  markShot(r, h.ref, me);
-  saveRound(r);
-  render();
-};
-$('shot-undo').onclick = () => { const h = hole(); if (h && round) { undoShot(round, h.ref); saveRound(round); render(); } };
 initCard({
   course: () => course,
   hole,
@@ -980,7 +945,7 @@ function esc(s: string) {
 // ---------- Start ----------
 map.on('load', () => {
   applyView();
-  // Start with the attribution collapsed to its (i) button so it doesn't cover the shot bar.
+  // Start with the attribution collapsed to its (i) button so it doesn't cover the map.
   const attrib = document.querySelector('.maplibregl-ctrl-attrib');
   attrib?.classList.remove('maplibregl-compact-show');
   attrib?.removeAttribute('open');

@@ -1,13 +1,7 @@
-// A round: scorecard, shots, today's pin positions and pace of play. Pure logic, no DOM.
+// A round: scorecard, today's pin positions and pace of play. Pure logic, no DOM.
 import type { Course, LngLat } from './types.ts';
-import { yd } from './yardage.ts';
 
 export type Fairway = 'hit' | 'left' | 'right';
-
-export interface Shot {
-  at: LngLat;
-  t: number;
-}
 
 export interface HoleScore {
   strokes?: number;
@@ -16,8 +10,6 @@ export interface HoleScore {
   fairway?: Fairway;
   penalties?: number;
   sand?: number;
-  /** Positions you marked, in order. */
-  shots?: Shot[];
   /** Today's pin, placed in green view. */
   pin?: LngLat;
   /** When you got to this hole (first time it was shown during the round). */
@@ -46,27 +38,6 @@ export function newRound(course: Course, startHole = 0, paceTarget = DEFAULT_PAC
   const pars: Record<number, number> = {};
   for (const h of course.holes) if (h.par) pars[h.ref] = h.par;
   return { id: 'r' + now.toString(36), courseId: course.id, courseName: course.name, startedAt: now, startHole, paceTarget, holes: {}, pars };
-}
-
-// ---------- Shots ----------
-
-/** Adds a shot at your position and returns the yardage of the shot before it (if any). */
-export function markShot(r: Round, ref: number, at: LngLat, now = Date.now()): number | null {
-  const h = (r.holes[ref] ??= {});
-  const shots = (h.shots ??= []);
-  const prev = shots[shots.length - 1];
-  shots.push({ at, t: now });
-  return prev ? yd(prev.at, at) : null;
-}
-
-export function undoShot(r: Round, ref: number) {
-  r.holes[ref]?.shots?.pop();
-}
-
-/** Yardage of each marked shot on a hole (from each mark to the next). */
-export function shotDistances(h: HoleScore | undefined): number[] {
-  const s = h?.shots ?? [];
-  return s.slice(1).map((p, i) => yd(s[i].at, p.at));
 }
 
 // ---------- Score ----------
