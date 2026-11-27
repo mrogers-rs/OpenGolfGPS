@@ -37,3 +37,7 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 - **Wake lock**: Screen Wake Lock API, re-acquired when you return to the app.
 
 Course data © OpenStreetMap contributors (ODbL). Imagery © Esri and partners.
+
+## Deploy (Cloudflare Pages)
+
+Connected to Git: build command `npm run build`, output directory `dist`. Every push to `main` deploys.
