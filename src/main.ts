@@ -5,6 +5,7 @@ import * as turf from '@turf/turf';
 import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
+import { scenery3d } from './scenery3d.ts';
 import { loadCourse, searchCourses, coursesNear, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
@@ -52,6 +53,7 @@ const map = new maplibregl.Map({
       hole: { type: 'geojson', data: turf.featureCollection([]) },
       measure: { type: 'geojson', data: turf.featureCollection([]) },
       shots: { type: 'geojson', data: turf.featureCollection([]) },
+      scenery3d: { type: 'geojson', data: turf.featureCollection([]) },
     },
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0d2a14' } },
@@ -78,6 +80,7 @@ const map = new maplibregl.Map({
       // Trees: a soft shadow plus a canopy about 5 m across in radius, scaled with zoom.
       { id: 'tree-shadow', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#000', 'circle-opacity': 0.22, 'circle-blur': 0.4, 'circle-translate': [2, 2], 'circle-radius': TREE_R } },
       { id: 'tree', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#2e7432', 'circle-stroke-color': '#1d5221', 'circle-stroke-width': 1, 'circle-radius': TREE_R } },
+      { id: 'trees3d', type: 'fill-extrusion', source: 'scenery3d', layout: { visibility: 'none' }, paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.97, 'fill-extrusion-vertical-gradient': true } },
       line('green-line', 'green', '#fff', 1.5),
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
       { id: 'hole-line', type: 'line', source: 'hole', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 2] } },
@@ -169,6 +172,7 @@ function setCourse(c: Course, keepHole = false) {
   if (!keepHole || fresh || state.hole >= c.holes.length) state.hole = 0;
   store.saveState(state);
   (map.getSource('course') as GeoJSONSource).setData(c.features);
+  (map.getSource('scenery3d') as GeoJSONSource).setData(scenery3d(c));
   target = null;
   if (player) {
     const at = holeAtStart(c.holes, player);
@@ -190,6 +194,7 @@ function upgradeCourse(c: Course) {
       if (course?.id !== fresh.id) return;
       course = fresh;
       (map.getSource('course') as GeoJSONSource).setData(fresh.features);
+      (map.getSource('scenery3d') as GeoJSONSource).setData(scenery3d(fresh));
       showHole(false);
     })
     .catch(() => { /* try again next time */ })
@@ -229,7 +234,29 @@ function fitHole(h: Hole) {
   if (player && turf.distance(player, h.center, { units: 'meters' }) < 640) pts.push(player);
   const bearing = turf.bearing(h.line[0], h.center);
   const cam = map.cameraForBounds(turf.bbox(turf.multiPoint(pts)) as [number, number, number, number], { bearing, padding: { top: 110, bottom: 30, left: 50, right: 50 }, maxZoom: 19 });
-  if (cam) map.jumpTo({ ...cam, bearing, pitch: 0 });
+  if (!cam) return;
+  map.jumpTo({ ...cam, bearing, pitch: 0 });
+  if (state.view === '3d') tiltToFit(pts);
+}
+
+/** Tilt the camera (as if standing behind the tee) and zoom/pan until every point is on screen. */
+const TILT = 50;
+function tiltToFit(pts: LngLat[]) {
+  map.jumpTo({ pitch: TILT });
+  const pad = { top: 110, bottom: 70, left: 40, right: 80 };
+  const { clientWidth: w, clientHeight: hgt } = map.getContainer();
+  for (let i = 0; i < 25; i++) {
+    const xy = pts.map((p) => map.project(p));
+    const minX = Math.min(...xy.map((q) => q.x)), maxX = Math.max(...xy.map((q) => q.x));
+    const minY = Math.min(...xy.map((q) => q.y)), maxY = Math.max(...xy.map((q) => q.y));
+    // Center the points in the padded area.
+    const dx = (minX + maxX) / 2 - (pad.left + (w - pad.right)) / 2;
+    const dy = (minY + maxY) / 2 - (pad.top + (hgt - pad.bottom)) / 2;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) map.jumpTo({ center: map.unproject([w / 2 + dx, hgt / 2 + dy]) });
+    const fits = maxX - minX <= w - pad.left - pad.right && maxY - minY <= hgt - pad.top - pad.bottom;
+    if (fits && Math.abs(dx) <= 1 && Math.abs(dy) <= 1) break;
+    if (!fits) map.jumpTo({ zoom: map.getZoom() - 0.12 });
+  }
 }
 
 /** Close-up of the green, from the direction you're approaching. */
@@ -637,24 +664,35 @@ $('dl-tiles').onclick = async () => {
   }
 };
 
-$<HTMLInputElement>('sat').onchange = (e) => setSatellite((e.target as HTMLInputElement).checked);
-$('viewtoggle').onclick = () => setSatellite(!state.satellite);
+$<HTMLInputElement>('sat').onchange = (e) => setView((e.target as HTMLInputElement).checked ? 'sat' : '3d');
+// Cycles 3D -> 2D -> Sat.
+$('viewtoggle').onclick = () => setView(state.view === '3d' ? '2d' : state.view === '2d' ? 'sat' : '3d');
 
-/** Satellite photo with light course outlines, or a drawn course map (works with no imagery at all). */
-function setSatellite(on: boolean) {
-  state.satellite = on;
+/**
+ * 3D: tilted drawn map with raised trees and buildings (default). 2D: the same map flat, from above.
+ * Sat: satellite photo with light course outlines.
+ */
+function setView(v: store.MapView) {
+  state.view = v;
+  state.satellite = v === 'sat';
   store.saveState(state);
   applyView();
+  const h = hole();
+  if (h) greenView ? fitGreen(h) : fitHole(h);
 }
 function applyView() {
   const on = state.satellite;
+  const is3d = state.view === '3d';
   map.setLayoutProperty('sat', 'visibility', on ? 'visible' : 'none');
   map.setPaintProperty('bg', 'background-color', on ? '#0d2a14' : MAP.bg);
   for (const k of GOLF_FILLS) map.setPaintProperty(k, 'fill-opacity', on ? 0.18 : 0.95);
   for (const k of SCENERY) map.setLayoutProperty(k, 'visibility', on ? 'none' : 'visible');
   map.setPaintProperty('cartpath', 'line-opacity', on ? 0.6 : 1);
-  // The button names the view you'd switch to.
-  $('viewtoggle').textContent = on ? 'Map' : 'Sat';
+  // In 3D the trees stand up; their flat shadows stay on the ground.
+  map.setLayoutProperty('trees3d', 'visibility', is3d ? 'visible' : 'none');
+  for (const k of ['tree', 'treerow']) map.setLayoutProperty(k, 'visibility', !on && !is3d ? 'visible' : 'none');
+  // The button shows the view you're in; tapping moves to the next.
+  $('viewtoggle').textContent = is3d ? '3D' : on ? 'Sat' : '2D';
   $<HTMLInputElement>('sat').checked = on;
 }
 $<HTMLInputElement>('hazards').onchange = (e) => { state.hazards = (e.target as HTMLInputElement).checked; store.saveState(state); render(); };

@@ -46,7 +46,9 @@ export function playLine(hole: Hole, from: LngLat | null): LngLat[] {
   const ls = turf.lineString(line);
   const snap = turf.nearestPointOnLine(ls, from);
   const idx = snap.properties.index ?? 0;
-  return [from, ...line.slice(idx + 1)];
+  const rest = line.slice(idx + 1);
+  // Snapped to the very end (e.g. standing behind the green): just you -> green center.
+  return [from, ...(rest.length ? rest : [hole.center])];
 }
 
 /** Distance along a polyline (yards) to the point on it nearest p, and how far off the line p is. */
