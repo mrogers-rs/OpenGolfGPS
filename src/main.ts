@@ -7,7 +7,8 @@ import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { distanceArcs, driveTarget, DEFAULT_DRIVE_YD } from './arcs.ts';
 import { holeCorridor, holeMask, framing, APPROACH_YD } from './cutout.ts';
-import { loadCourse, courseFromSnapshot, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit, type LoadProgress } from './overpass.ts';
+import { searchCourses } from './search.ts';
+import { loadCourse, courseFromSnapshot, coursesNear, stepProgress, nextFrame, type CourseHit, type LoadProgress } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
@@ -1255,7 +1256,8 @@ $('search').onclick = async () => {
   if (!q) return;
   msg('Searching…');
   try {
-    const hits = await searchCourses(q);
+    const here: LngLat | null = player ?? (course ? [(course.bbox[0] + course.bbox[2]) / 2, (course.bbox[1] + course.bbox[3]) / 2] : null);
+    const hits = await searchCourses(q, here);
     renderResults(hits);
     msg(hits.length ? '' : 'No golf courses found by that name.');
   } catch (e) {
