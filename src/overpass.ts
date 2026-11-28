@@ -3,6 +3,7 @@ import * as turf from '@turf/turf';
 import { parseCourse } from './course.ts';
 import type { Course, LngLat, OverpassElement } from './types.ts';
 import { apiCourseHead, apiCourseFeatures } from './osmapi.ts';
+import { toElements, type CourseSnapshot } from './courses/snapshot.ts';
 
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -253,9 +254,18 @@ export async function loadCourse(id: string, fallbackName?: string, onProgress?:
     { name: 'overpass', run: (sig) => overpass(query, onBytes, sig) },
     { name: 'osm-api', run: (sig) => apiCourseFeatures(s, w, n, e, sig, onBytes) },
   ], HEDGE_SOURCE_MS);
+  return build(els, { id, name: c.tags?.name ?? fallbackName ?? 'Golf course', boundary }, b, onProgress);
+}
+
+/** A course from the OpenStreetMap data built into the app (src/courses/osm): no network needed. */
+export async function courseFromSnapshot(s: CourseSnapshot, onProgress?: LoadProgress): Promise<Course> {
+  return build(toElements(s), { id: s.courseId, name: s.name }, s.bounds, onProgress);
+}
+
+async function build(els: OverpassElement[], opts: Parameters<typeof parseCourse>[1], b: NonNullable<OverpassElement['bounds']>, onProgress?: LoadProgress): Promise<Course> {
   stepProgress(onProgress, 'build');
   await nextFrame(); // let the bar paint before the parse blocks the page
-  const course = parseCourse(els, { id, name: c.tags?.name ?? fallbackName ?? 'Golf course', boundary });
+  const course = parseCourse(els, opts);
   // No holes mapped yet: still return the course (framed on its boundary) so it can be mapped in the app.
   if (!course.holes.length) course.bbox = [b.minlon, b.minlat, b.maxlon, b.maxlat];
   return course;

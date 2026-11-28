@@ -7,7 +7,7 @@ import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
 import { distanceArcs, driveTarget, DEFAULT_DRIVE_YD } from './arcs.ts';
 import { holeCorridor, holeMask, framing, APPROACH_YD } from './cutout.ts';
-import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
+import { loadCourse, courseFromSnapshot, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit, type LoadProgress } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
@@ -17,7 +17,7 @@ import { initCard, renderCard } from './card.ts';
 import { initScore, openScore, renderScore, scoreOpen } from './score.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 import { applyEdits, closeRing, completeEdits, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
-import { BUILTIN, bundledEdits } from './courses/builtin.ts';
+import { BUILTIN, bundledEdits, bundledSnapshot, hasSnapshot } from './courses/builtin.ts';
 
 /** A hole picked more than this long ago is treated as a new round on reopen. */
 const ROUND_RESET_MS = 6 * 3600 * 1000;
@@ -277,18 +277,41 @@ function updateCutout(h: Hole) {
 /** Courses saved by an older version lack scenery: quietly re-fetch them when online. */
 let upgrading = '';
 function upgradeCourse(c: Course) {
-  if ((c.v ?? 1) >= COURSE_DATA_VERSION || !navigator.onLine || upgrading === c.id) return;
+  if (upgrading === c.id) return;
+  if (hasSnapshot(c.id)) {
+    // Built-in course: switch a copy saved from OpenStreetMap (or an older built-in copy) to the built-in data.
+    upgrading = c.id;
+    bundledSnapshot(c.id)
+      .then((s) => (s && s.snapshotAt !== c.snapshotAt ? fetchCourse(c.id, c.name) : null))
+      .then((fresh) => { if (fresh) replaceCourse(c, fresh, true); })
+      .catch(() => { /* keep the saved copy */ })
+      .finally(() => { upgrading = ''; });
+    return;
+  }
+  if ((c.v ?? 1) >= COURSE_DATA_VERSION || !navigator.onLine) return;
   upgrading = c.id;
   loadCourse(c.id, c.name)
-    .then((fresh) => {
-      if (fresh.holes.length !== c.holes.length) return; // mapping changed a lot; leave it for a manual refresh
-      store.saveCourse(fresh);
-      if (course?.id !== fresh.id) return;
-      baseCourse = fresh;
-      redraw();
-    })
+    .then((fresh) => replaceCourse(c, fresh))
     .catch(() => { /* try again next time */ })
     .finally(() => { upgrading = ''; });
+}
+
+function replaceCourse(c: Course, fresh: Course, builtIn = false) {
+  // Mapping changed a lot: leave it for a manual refresh (the built-in data is always taken).
+  if (!builtIn && fresh.holes.length !== c.holes.length) return;
+  store.saveCourse(fresh);
+  if (course?.id !== fresh.id) return;
+  baseCourse = fresh;
+  redraw();
+}
+
+/** A course from the data built into the app if there is some (no network), else from OpenStreetMap. */
+async function fetchCourse(id: string, name: string, onProgress?: LoadProgress): Promise<Course> {
+  const s = await bundledSnapshot(id);
+  if (!s) return loadCourse(id, name, onProgress);
+  const c = await courseFromSnapshot(s, onProgress);
+  c.snapshotAt = s.snapshotAt;
+  return c;
 }
 
 function hole(): Hole | null {
@@ -1183,11 +1206,11 @@ function renderResults(hits: CourseHit[]) {
 async function openCourse(h: CourseHit, force = false) {
   const cached = !force && store.getCourse(h.id);
   if (cached) { setCourse(cached); sheet.close(); if (!course?.holes.length) startEditing(); return; }
-  msg(`Loading ${h.name} from OpenStreetMap…`);
+  msg(hasSnapshot(h.id) ? `Opening ${h.name}…` : `Loading ${h.name} from OpenStreetMap…`);
   setButtonsBusy(true);
   progress(0, 'Starting');
   try {
-    const c = await loadCourse(h.id, h.name, progress);
+    const c = await fetchCourse(h.id, h.name, progress);
     stepProgress(progress, 'save');
     store.saveCourse(c);
     await nextFrame();

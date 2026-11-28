@@ -1,0 +1,25 @@
+# Refreshes the OpenStreetMap data built into the app for the built-in courses (src/courses/osm/).
+# Run it from the Actions tab ("Run workflow") on any branch; it commits the new data to that branch.
+name: OSM snapshot
+on:
+  workflow_dispatch:
+  push:
+    paths: ['scripts/snapshot-osm.ts', '.github/workflows/osm-snapshot.yml']
+permissions:
+  contents: write
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node --experimental-strip-types scripts/snapshot-osm.ts
+      - name: Commit if changed
+        run: |
+          git add src/courses/osm
+          if git diff --cached --quiet; then echo "No change"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update built-in OpenStreetMap course data"
+          git push
