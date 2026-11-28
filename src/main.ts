@@ -543,6 +543,11 @@ function render() {
     gps.className = accuracy <= 10 ? 'good' : 'poor';
   }
 
+  // Your crosshair if you placed one, else the default: the drive spot from the tee on a par 4/5, or the green center
+  // on a par 3 or when the green is in reach (until you're close enough for the pin line). Not if you cleared it.
+  const near = !!me && yd(me, h.center) <= APPROACH_YD;
+  const auto = !targetCleared && !greenView ? driveTarget(h, fairwayPolys, me, state.drive ?? DEFAULT_DRIVE_YD) : null;
+  shownTarget = editing ? null : target ?? (auto && !(near && auto === h.center) ? auto : null);
   renderPinLine(h, me, pin);
   renderHazards(h, me);
   renderArcs(h, me);
@@ -550,23 +555,23 @@ function render() {
   renderPace();
   aimCart();
 
-  // Your crosshair if you placed one, else the default drive spot from the tee (par 4/5) unless you cleared it.
-  shownTarget = editing ? null : target ?? (!targetCleared && !greenView ? driveTarget(h, fairwayPolys, me, state.drive ?? DEFAULT_DRIVE_YD) : null);
   if (shownTarget) {
     const target = shownTarget;
     const m = measure(h, player, target);
     const to = pin ?? h.center;
     const rest = yd(target, to);
+    // On the green already (the par 3 default): just the one leg to it, no second leg to the pin.
+    const onGreen = rest < 5;
     $('measure').hidden = false;
     targetMarker.setLngLat(target).addTo(map);
     (map.getSource('measure') as GeoJSONSource).setData(turf.featureCollection([
       turf.lineString([m.from, target], { leg: 'to' }),
-      turf.lineString([target, to], { leg: 'rest' }),
+      ...(onGreen ? [] : [turf.lineString([target, to], { leg: 'rest' })]),
     ]));
     // Big yardages halfway along each leg.
     legLabels([
       { at: turf.midpoint(m.from, target).geometry.coordinates as LngLat, extra: 'to', html: `<b>${fmt(m.toTarget)}</b>` },
-      { at: turf.midpoint(target, to).geometry.coordinates as LngLat, extra: 'rest', html: `<b>${fmt(rest)}</b>` },
+      ...(onGreen ? [] : [{ at: turf.midpoint(target, to).geometry.coordinates as LngLat, extra: 'rest', html: `<b>${fmt(rest)}</b>` }]),
     ]);
   } else {
     $('measure').hidden = true;

@@ -50,16 +50,16 @@ export const DEFAULT_DRIVE_YD = 240;
 const LEFT_TEE_YD = 40;
 
 /**
- * Where a drive of `yds` lands on a par 4 or 5: on the line of play at that straight-line distance from the tee
+ * The default crosshair. On a par 3, or when the green is within reach of your drive, it sits on the green center.
+ * Otherwise it's where a drive of `yds` lands: on the line of play at that straight-line distance from the tee
  * (or from you, while you're on the tee), moved sideways to the middle of the fairway when there's one there.
- * Null on par 3s, when the green is within reach, or once you've left the tee.
+ * Null once you've left the tee on a hole where the green is out of reach.
  */
 export function driveTarget(h: Hole, fairways: GeoJSON.Feature<GeoJSON.Polygon>[], me: LngLat | null, yds = DEFAULT_DRIVE_YD): LngLat | null {
-  if (!h.par || h.par < 4) return null;
   const tee = h.line[0];
-  if (me && yd(me, tee) > LEFT_TEE_YD) return null;
   const origin = me ?? tee;
-  if (yd(origin, h.center) < yds + 20) return null;
+  if ((h.par ?? 0) <= 3 || yd(origin, h.center) < yds + 20) return h.center;
+  if (me && yd(me, tee) > LEFT_TEE_YD) return null;
   const line = turf.lineString([...h.line.slice(0, -1), h.center]);
   const total = turf.length(line, { units: 'meters' });
   let s = 0;

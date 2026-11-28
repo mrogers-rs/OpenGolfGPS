@@ -54,21 +54,24 @@ test('distance arcs on par 4s and 5s, short of the green, at the right range', a
   assert.ok(distanceArcs(p4, null).every((a) => a.yds < yd(p4.line[0], p4.center) - 15));
 });
 
-test('default drive crosshair: 240 yd out, in the fairway, only from the tee on par 4/5', async () => {
+test('default crosshair: green center on par 3s, else 240 yd out in the fairway from the tee', async () => {
   const { driveTarget } = await import('../src/arcs.ts');
   const fairways = course.features.features.filter((f: any) => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon') as any;
   const p3 = course.holes.find((x) => x.par === 3)!;
-  assert.equal(driveTarget(p3, fairways, null), null);
+  assert.deepEqual(driveTarget(p3, fairways, null), p3.center);
+  const mid3 = turf.along(turf.lineString(p3.line), 60, { units: 'meters' }).geometry.coordinates as [number, number];
+  assert.deepEqual(driveTarget(p3, fairways, mid3), p3.center);
   let inFw = 0, n = 0;
   for (const h of course.holes.filter((x) => (x.par ?? 0) >= 4)) {
     const t = driveTarget(h, fairways, null, 240);
     if (!t) continue;
+    if (yd(h.line[0], h.center) < 260) { assert.deepEqual(t, h.center, `hole ${h.ref}: reachable green`); continue; }
     n++;
     assert.ok(Math.abs(yd(h.line[0], t) - 240) < 25, `hole ${h.ref}: ${yd(h.line[0], t)}`);
     if (fairways.some((f: any) => turf.booleanPointInPolygon(t, f))) inFw++;
-    // Walked off the tee: no default.
+    // Walked off the tee: no drive spot (green center once it's in reach).
     const mid = turf.along(turf.lineString(h.line), 150, { units: 'meters' }).geometry.coordinates as [number, number];
-    assert.equal(driveTarget(h, fairways, mid), null);
+    assert.deepEqual(driveTarget(h, fairways, mid), yd(mid, h.center) < 260 ? h.center : null);
   }
   assert.ok(n >= 8, `targets on ${n} holes`);
 });
