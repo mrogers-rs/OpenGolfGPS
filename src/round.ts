@@ -10,6 +10,8 @@ export interface HoleScore {
   fairway?: Fairway;
   penalties?: number;
   sand?: number;
+  /** Green in regulation as you marked it. Unset = worked out from strokes and putts. */
+  gir?: boolean;
   /** Today's pin, placed in green view. */
   pin?: LngLat;
   /** When you got to this hole (first time it was shown during the round). */
@@ -67,6 +69,7 @@ export interface Totals {
 
 /** Green in regulation: on the green with par-2 strokes or fewer (needs putts). */
 export function isGir(score: HoleScore, par: number): boolean | undefined {
+  if (score.gir != null) return score.gir;
   if (score.strokes == null || score.putts == null) return undefined;
   return score.strokes - score.putts <= par - 2;
 }
@@ -104,6 +107,16 @@ export function totals(r: Round, refs?: number[]): Totals {
   t.toPar = t.strokes - t.par;
   return t;
 }
+
+/** Name for a score relative to par (Ace for a hole in one). */
+export function scoreName(strokes: number, par: number): string {
+  if (strokes === 1) return 'Ace';
+  const d = strokes - par;
+  return d <= -3 ? 'Albatross' : d === -2 ? 'Eagle' : d === -1 ? 'Birdie' : d === 0 ? 'Par' : d === 1 ? 'Bogey' : d === 2 ? 'Double' : d === 3 ? 'Triple' : '+' + d;
+}
+
+/** CSS class for a score relative to par. */
+export const scoreClass = (d: number) => (d <= -2 ? 'eagle' : d === -1 ? 'birdie' : d === 0 ? 'par' : d === 1 ? 'bogey' : 'double');
 
 export const fmtToPar = (n: number) => (n === 0 ? 'E' : n > 0 ? '+' + n : String(n));
 export const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) + '%' : '–');

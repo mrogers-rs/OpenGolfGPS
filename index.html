@@ -85,6 +85,7 @@
 
       <nav id="tabs">
         <button id="greenview" class="tab" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="16" rx="9" ry="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 16V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 3.5l6 2.3-6 2.3z" fill="currentColor"/></svg><span>Green</span></button>
+        <button id="topar" class="tab even" aria-label="Enter scores"><b id="topar-n">E</b><span id="topar-thru">SCORE</span></button>
         <button id="card" class="tab"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span id="cardlbl">Card</span></button>
       </nav>
     </div>
@@ -147,15 +148,8 @@
     </dialog>
 
     <dialog id="cardsheet">
-      <form method="dialog" class="sheet-head"><h2><span id="c-hole">Hole</span> <small id="c-par"></small></h2><button aria-label="Close">✕</button></form>
-      <div class="entry">
-        <span class="lbl">SCORE</span><div id="c-strokes" class="chips"></div>
-        <span class="lbl">PUTTS</span><div id="c-putts" class="chips"></div>
-        <div id="c-fw-row"><span class="lbl">FAIRWAY</span><div id="c-fw" class="chips"></div></div>
-        <span class="lbl">PENALTIES</span><div id="c-pen" class="chips"></div>
-        <div id="c-sand" class="chips"></div>
-      </div>
-      <h3>Scorecard · <span id="c-score"></span></h3>
+      <form method="dialog" class="sheet-head"><h2>Scorecard</h2><button aria-label="Close">✕</button></form>
+      <h3><span id="c-score"></span> · tap a hole to change its score</h3>
       <table class="card"><thead><tr><th>Hole</th><th>Par</th><th>Score</th><th>Putts</th><th>FW</th><th>GIR</th></tr></thead><tbody id="c-table"></tbody></table>
       <h3>This round</h3>
       <div id="c-stats" class="stats"></div>
@@ -163,6 +157,30 @@
       <div id="c-career"></div>
       <h3>Past rounds</h3>
       <ul id="c-history" class="list"></ul>
+    </dialog>
+
+    <dialog id="scoresheet" aria-label="Score this hole">
+      <div class="s-head">
+        <button id="s-prev" class="s-nav" type="button" aria-label="Previous hole">‹</button>
+        <div class="s-title"><span class="lbl">HOLE</span><b id="s-ref">–</b><span id="s-par"></span></div>
+        <button id="s-next" class="s-nav" type="button" aria-label="Next hole">›</button>
+        <div id="s-total" class="topar even"></div>
+        <button id="s-x" class="s-x" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="s-body">
+        <section class="s-sec"><h4>Score</h4><div id="s-strokes" class="s-grid s-strokes"></div></section>
+        <section class="s-sec"><h4>Putts</h4><div id="s-putts" class="s-grid s-putts"></div></section>
+        <section class="s-sec" id="s-fw-row"><h4>Tee shot</h4><div id="s-fw" class="s-grid s-fw"></div></section>
+        <section class="s-sec">
+          <button id="s-gir" class="gir" type="button" aria-pressed="false"><span class="tick" aria-hidden="true"></span><span>Green in regulation</span><small id="s-gir-note"></small></button>
+        </section>
+        <section class="s-sec s-extra"><h4>Penalties</h4><div id="s-pen" class="s-grid s-pen"></div><div id="s-sand" class="s-grid s-sand"></div></section>
+      </div>
+      <div class="s-foot">
+        <button id="s-card" type="button">Full card</button>
+        <button id="s-close" type="button">Close</button>
+        <button id="s-go" type="button" class="s-go">Next hole ›</button>
+      </div>
     </dialog>
 
     <script type="module" src="/src/main.ts"></script>

@@ -1,6 +1,6 @@
 // Scorecard sheet: quick entry for the current hole, the full card, round stats and past rounds.
 import type { Course, Hole } from './types.ts';
-import { type Fairway, type Round, type HoleScore, totals, fmtToPar, pct, isGir } from './round.ts';
+import { type Round, totals, fmtToPar, pct, isGir } from './round.ts';
 import * as store from './storage.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -15,6 +15,8 @@ export interface CardHost {
   finishRound: () => void;
   goHole: (i: number) => void;
   changed: () => void;
+  /** Opens the scoring screen for a hole. */
+  openScore: (i: number) => void;
 }
 
 let host: CardHost;
@@ -22,7 +24,8 @@ const sheet = () => $('cardsheet') as HTMLDialogElement;
 
 export function initCard(h: CardHost) {
   host = h;
-  $('card').onclick = () => { renderCard(); sheet().showModal(); };
+  // The Card tab opens the scoring screen for this hole; the full card is one tap from there.
+  $('card').onclick = () => { const c = host.course(); const h = host.hole(); if (c && h) host.openScore(c.holes.indexOf(h)); };
   $('c-new').onclick = () => { if (confirmBox('Start a new round? The current one is kept in Past rounds.')) { host.newRound(); renderCard(); } };
   $('c-finish').onclick = () => { host.finishRound(); renderCard(); };
 }
@@ -32,44 +35,11 @@ function confirmBox(text: string) {
   return window.confirm(text);
 }
 
-function chips(container: HTMLElement, values: (number | string)[], current: number | string | undefined, label: (v: any) => string, onPick: (v: any) => void) {
-  container.innerHTML = '';
-  for (const v of values) {
-    const b = document.createElement('button');
-    b.textContent = label(v);
-    if (v === current) b.className = 'on';
-    b.onclick = () => onPick(v === current ? undefined : v);
-    container.appendChild(b);
-  }
-}
-
-/** Edits a field of the current hole's score and redraws. */
-function edit(fn: (s: HoleScore) => void) {
-  const h = host.hole();
-  const r = host.round(true);
-  if (!h || !r) return;
-  fn((r.holes[h.ref] ??= {}));
-  host.save(r);
-  host.changed();
-  renderCard();
-}
-
 export function renderCard() {
   const c = host.course();
   const h = host.hole();
   const r = host.round(false);
   if (!c || !h) return;
-  const s = r?.holes[h.ref] ?? {};
-  const par = h.par ?? 4;
-
-  $('c-hole').textContent = `Hole ${h.ref}`;
-  $('c-par').textContent = h.par ? `Par ${h.par}` : 'Par ?';
-  chips($('c-strokes'), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], s.strokes, String, (v) => edit((x) => { x.strokes = v; }));
-  chips($('c-putts'), [0, 1, 2, 3, 4], s.putts, String, (v) => edit((x) => { x.putts = v; }));
-  $('c-fw-row').hidden = par < 4;
-  chips($('c-fw'), ['left', 'hit', 'right'] as Fairway[], s.fairway, (v) => ({ left: '← Left', hit: 'Hit', right: 'Right →' } as Record<string, string>)[v], (v) => edit((x) => { x.fairway = v; }));
-  chips($('c-pen'), [0, 1, 2, 3], s.penalties ?? 0, String, (v) => edit((x) => { x.penalties = v ?? 0; }));
-  chips($('c-sand'), ['yes'], s.sand ? 'yes' : undefined, () => 'In a bunker', (v) => edit((x) => { x.sand = v ? 1 : 0; }));
 
   renderTable(c, r);
   renderStats(r);
@@ -100,7 +70,7 @@ function renderTable(c: Course, r: Round | null) {
   half('Total', c.holes);
   tb.innerHTML = rows.join('');
   tb.querySelectorAll<HTMLTableRowElement>('tr[data-i]').forEach((tr) => {
-    tr.onclick = () => { host.goHole(Number(tr.dataset.i)); renderCard(); };
+    tr.onclick = () => { sheet().close(); host.openScore(Number(tr.dataset.i)); };
   });
   const t = r ? totals(r) : null;
   $('c-score').textContent = t?.holes ? `${t.strokes} (${fmtToPar(t.toPar)}) thru ${t.holes}` : 'No scores yet';
