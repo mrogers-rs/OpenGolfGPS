@@ -5,10 +5,9 @@ import * as turf from '@turf/turf';
 import type { Course, Hole, LngLat } from './types.ts';
 import { autoAdvance, holeAtStart } from './advance.ts';
 import { COURSE_DATA_VERSION } from './course.ts';
-import { scenery3d } from './scenery3d.ts';
 import { distanceArcs, driveTarget, DEFAULT_DRIVE_YD } from './arcs.ts';
-import { holeCorridor, holeMask, insideCorridor, framing, APPROACH_YD } from './cutout.ts';
-import { loadCourse, searchCourses, coursesNear, courseAt, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
+import { holeCorridor, holeMask, framing, APPROACH_YD } from './cutout.ts';
+import { loadCourse, searchCourses, coursesNear, stepProgress, nextFrame, type CourseHit } from './overpass.ts';
 import * as store from './storage.ts';
 import { keepAwake, wakeLockSupported } from './wakelock.ts';
 import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
@@ -20,9 +19,6 @@ import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yar
 import { applyEdits, closeRing, completeEdits, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
 import { BUILTIN, bundledEdits } from './courses/builtin.ts';
 
-/** Test course: Auburn Golf Course, Auburn WA. Its OSM id is looked up by name the first time (then remembered). */
-/** Built-in test course, found by position (29630 Green River Rd SE, Auburn WA). The key holds its OSM id once found. */
-const TEST_COURSE = { name: 'Auburn Golf Course', center: [-122.2083, 47.3362] as LngLat, key: 'testCourse:auburn' };
 /** A hole picked more than this long ago is treated as a new round on reopen. */
 const ROUND_RESET_MS = 6 * 3600 * 1000;
 
@@ -62,7 +58,6 @@ const map = new maplibregl.Map({
       course: { type: 'geojson', data: turf.featureCollection([]), attribution: '© OpenStreetMap contributors' },
       hole: { type: 'geojson', data: turf.featureCollection([]) },
       measure: { type: 'geojson', data: turf.featureCollection([]) },
-      scenery3d: { type: 'geojson', data: turf.featureCollection([]) },
       cutout: { type: 'geojson', data: turf.featureCollection([]) },
       pinline: { type: 'geojson', data: turf.featureCollection([]) },
       arcs: { type: 'geojson', data: turf.featureCollection([]) },
@@ -88,14 +83,13 @@ const map = new maplibregl.Map({
       line('road', 'road', '#ddd6c6', ['interpolate', ['linear'], ['zoom'], 15, 2, 19, 12]),
       line('path', 'path', '#eadfc2', ['interpolate', ['linear'], ['zoom'], 15, 1, 19, 3], [2, 1.5]),
       line('cartpath', 'cartpath', '#d4ccb6', ['interpolate', ['linear'], ['zoom'], 15, 1.2, 19, 5]),
-      { id: 'building', type: 'fill-extrusion', source: 'course', filter: ['==', ['get', 'kind'], 'building'], paint: { 'fill-extrusion-color': '#bdb2a3', 'fill-extrusion-height': 7, 'fill-extrusion-opacity': 0.95 } },
+      { id: 'building', type: 'fill', source: 'course', filter: ['==', ['get', 'kind'], 'building'], paint: { 'fill-color': '#bdb2a3', 'fill-outline-color': '#9a8f80', 'fill-opacity': 0.95 } },
       { id: 'treerow', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'treerow'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#2c6430', 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 15, 3, 20, 90] } },
       // Trees: a soft shadow plus a canopy about 5 m across in radius, scaled with zoom.
       { id: 'tree-shadow', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#000', 'circle-opacity': 0.22, 'circle-blur': 0.4, 'circle-translate': [2, 2], 'circle-radius': TREE_R } },
       { id: 'tree', type: 'circle', source: 'course', filter: ['==', ['get', 'kind'], 'tree'], paint: { 'circle-color': '#2e7432', 'circle-stroke-color': '#1d5221', 'circle-stroke-width': 1, 'circle-radius': TREE_R } },
-      { id: 'trees3d', type: 'fill-extrusion', source: 'scenery3d', layout: { visibility: 'none' }, paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.97, 'fill-extrusion-vertical-gradient': true } },
       line('green-line', 'green', '#fff', 1.5),
-      // Hole cutout: everything outside the hole and its margin is darkened (raised trees are filtered to the hole instead); above other holes' green outlines.
+      // Hole cutout: everything outside the hole and its margin is darkened; above other holes' green outlines.
       { id: 'cutout', type: 'fill', source: 'cutout', layout: { visibility: 'none' }, paint: { 'fill-color': '#040805', 'fill-opacity': 0.9 } },
       { id: 'cutout-edge', type: 'line', source: 'cutout', layout: { visibility: 'none', 'line-join': 'round' }, paint: { 'line-color': '#a8d8ae', 'line-opacity': 0.45, 'line-width': 1.5, 'line-blur': 0.5 } },
       { id: 'holes', type: 'line', source: 'course', filter: ['==', ['get', 'kind'], 'hole'], paint: { 'line-color': '#fff', 'line-width': 1, 'line-opacity': 0.25 } },
@@ -111,7 +105,7 @@ const map = new maplibregl.Map({
       { id: 'edit-pts', type: 'circle', source: 'edit', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 16, ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 'tree', 4, 6], 20, ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 'tree', 40, 6]], 'circle-color': ['match', ['get', 'kind'], 'tee', '#2f7bff', 'dogleg', '#ffd400', 'tree', '#2e7432', '#ffd400'], 'circle-opacity': ['match', ['get', 'kind'], 'tree', 0.75, 1], 'circle-stroke-color': ['case', ['==', ['get', 'sel'], true], '#ff3b30', ['==', ['get', 'kind'], 'tree'], '#b6ffad', '#000'], 'circle-stroke-width': ['case', ['==', ['get', 'sel'], true], 3, 2] } },
     ],
   },
-  center: TEST_COURSE.center,
+  center: BUILTIN[0].center,
   zoom: 15,
   attributionControl: { compact: true },
   dragRotate: false,
@@ -250,7 +244,6 @@ function setCourse(raw: Course, keepHole = false) {
   if (!keepHole || fresh || state.hole >= c.holes.length) state.hole = 0;
   store.saveState(state);
   (map.getSource('course') as GeoJSONSource).setData(c.features);
-  sceneryAll = scenery3d(c);
   fairwayPolys = c.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
   target = null;
   if (player) {
@@ -267,8 +260,6 @@ let baseCourse: Course | null = null;
 const editsFor = (id: string): CourseEdits | null => store.getEdits(id) ?? bundledEdits(id);
 const withEdits = (c: Course) => applyEdits(c, editsFor(c.id));
 
-/** All raised trees for the course; the hole cutout shows only the ones on the current hole. */
-let sceneryAll: GeoJSON.FeatureCollection = turf.featureCollection([]);
 /** Fairway outlines, for centering the default drive crosshair. */
 let fairwayPolys: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
 /** The crosshair on screen: yours, or the default drive spot. */
@@ -276,12 +267,11 @@ let shownTarget: LngLat | null = null;
 /** You cleared the crosshair on this hole: don't put the default one back until the next hole. */
 let targetCleared = false;
 
-/** Darkens everything but the current hole (when the cutout is on) and keeps raised trees to the hole. */
+/** Darkens everything but the current hole (when the cutout is on). */
 function updateCutout(h: Hole) {
   const on = state.cutout !== false && !editing;
   const corridor = holeCorridor(h);
   (map.getSource('cutout') as GeoJSONSource).setData(on ? holeMask(corridor) : turf.featureCollection([]));
-  (map.getSource('scenery3d') as GeoJSONSource).setData(on ? turf.featureCollection(insideCorridor(sceneryAll.features, corridor)) : sceneryAll);
 }
 
 /** Courses saved by an older version lack scenery: quietly re-fetch them when online. */
@@ -314,7 +304,6 @@ function redraw() {
   const ref = editing?.ref ?? course?.holes[state.hole]?.ref;
   course = withEdits(baseCourse);
   (map.getSource('course') as GeoJSONSource).setData(course.features);
-  sceneryAll = scenery3d(course);
   fairwayPolys = course.features.features.filter((f): f is GeoJSON.Feature<GeoJSON.Polygon> => f.properties?.kind === 'fairway' && f.geometry.type === 'Polygon');
   const i = course.holes.findIndex((h) => h.ref === ref);
   if (i >= 0) state.hole = i;
@@ -355,7 +344,7 @@ function showHole(fit: boolean) {
   (map.getSource('hole') as GeoJSONSource).setData(turf.lineString(h.line));
   flagMarker.setLngLat(pinOf(h) ?? h.pin ?? h.center).addTo(map);
   updateCutout(h);
-  if (map.getLayer('trees3d')) applyView();
+  if (map.getLayer('sat')) applyView();
   if (fit) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); }
   render();
 }
@@ -420,17 +409,14 @@ function unstretch(p: { top: number; bottom: number; left: number; right: number
  * to the green, so it zooms in as you walk. Near the green: a close-up of the green, faced from where you are.
  * `animate` glides there (used while following you) instead of jumping.
  */
-const TILT = 50;
-const TILT_WIDE = 32;
 let lastFitFrom: LngLat | null = null;
 /** You panned or zoomed by hand: stop following until the next hole or Recenter. */
 let userMoved = false;
 function fitHole(h: Hole, animate = false) {
   const f = framing(h, usablePlayer(h));
   const bearing = playBearing(f.from, h.center);
-  const pitch = state.view === '3d' && !greenView && f.mode !== 'approach' ? (wide() ? TILT_WIDE : TILT) : 0;
   const before = animate ? { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() } : null;
-  fitPoints(f.pts, bearing, pitch, fitPadding(), f.mode === 'approach' ? 20.5 : 19);
+  fitPoints(f.pts, bearing, 0, fitPadding(), f.mode === 'approach' ? 20.5 : 19);
   lastFitFrom = player;
   if (before) {
     const after = { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
@@ -1199,7 +1185,6 @@ async function openCourse(h: CourseHit, force = false) {
     const c = await loadCourse(h.id, h.name, progress);
     stepProgress(progress, 'save');
     store.saveCourse(c);
-    stepProgress(progress, 'scenery');
     await nextFrame();
     setCourse(c);
     const n = course?.holes.length ?? 0;
@@ -1233,7 +1218,7 @@ function progress(frac: number | null, label = '') {
 
 /** Course buttons do nothing while a load is running, so you can't start two at once. */
 function setButtonsBusy(on: boolean) {
-  for (const id of ['search', 'near', 'test-course', 'refresh', 'dl-tiles', 'reset']) $<HTMLButtonElement>(id).disabled = on;
+  for (const id of ['search', 'near', 'refresh', 'dl-tiles', 'reset']) $<HTMLButtonElement>(id).disabled = on;
   document.querySelectorAll<HTMLButtonElement>('#results button, #saved button').forEach((b) => (b.disabled = on));
 }
 
@@ -1265,26 +1250,6 @@ $('near').onclick = () => {
   };
   if (player) return go(player);
   navigator.geolocation.getCurrentPosition((pos) => go([pos.coords.longitude, pos.coords.latitude]), (err) => msg(err.message), { timeout: 15000 });
-};
-$('test-course').onclick = async () => {
-  let id = '';
-  try { id = localStorage.getItem(TEST_COURSE.key) ?? ''; } catch { /* ignore */ }
-  if (!id) {
-    msg(`Finding ${TEST_COURSE.name}…`);
-    setButtonsBusy(true);
-    try {
-      // By position, not by name: the name search was unreliable.
-      const hit = await courseAt(TEST_COURSE.center, /auburn/i);
-      if (!hit) throw new Error('Course not found in OpenStreetMap');
-      id = hit.id;
-      try { localStorage.setItem(TEST_COURSE.key, id); } catch { /* ignore */ }
-    } catch (e) {
-      return msg(`Couldn't find ${TEST_COURSE.name}. ${(e as Error).message}`, { label: 'Try again', run: () => $('test-course').click() });
-    } finally {
-      setButtonsBusy(false);
-    }
-  }
-  openCourse({ id, name: TEST_COURSE.name, center: TEST_COURSE.center });
 };
 $('refresh').onclick = () => { if (course) openCourse({ id: course.id, name: course.name, center: [0, 0] }, true); };
 
@@ -1328,14 +1293,11 @@ async function resetApp() {
   } catch { /* ignore */ }
 }
 
-$<HTMLInputElement>('sat').onchange = (e) => setView((e.target as HTMLInputElement).checked ? 'sat' : '3d');
-// Cycles 3D -> 2D -> Sat.
-$('viewtoggle').onclick = () => setView(state.view === '3d' ? '2d' : state.view === '2d' ? 'sat' : '3d');
+$<HTMLInputElement>('sat').onchange = (e) => setView((e.target as HTMLInputElement).checked ? 'sat' : '2d');
+// Satellite on/off.
+$('viewtoggle').onclick = () => setView(state.satellite ? '2d' : 'sat');
 
-/**
- * 3D: tilted drawn map with raised trees and buildings (default). 2D: the same map flat, from above.
- * Sat: satellite photo with light course outlines.
- */
+/** Sat: satellite photo with light course outlines (default). Off: the drawn map, flat from above. */
 function setView(v: store.MapView) {
   state.view = v;
   state.satellite = v === 'sat';
@@ -1346,22 +1308,17 @@ function setView(v: store.MapView) {
 }
 function applyView() {
   const on = state.satellite;
-  // Green view is always flat and from above, so trees go back to flat canopies there.
-  const is3d = state.view === '3d' && !greenView;
   map.setLayoutProperty('sat', 'visibility', on ? 'visible' : 'none');
   map.setPaintProperty('bg', 'background-color', on ? '#0d2a14' : MAP.bg);
   for (const k of GOLF_FILLS) map.setPaintProperty(k, 'fill-opacity', on ? 0.18 : 0.95);
   for (const k of SCENERY) map.setLayoutProperty(k, 'visibility', on ? 'none' : 'visible');
   map.setPaintProperty('cartpath', 'line-opacity', on ? 0.6 : 1);
-  // In 3D the trees stand up; their flat shadows stay on the ground.
-  map.setLayoutProperty('trees3d', 'visibility', is3d ? 'visible' : 'none');
   const cut = state.cutout !== false;
   for (const k of ['cutout', 'cutout-edge']) map.setLayoutProperty(k, 'visibility', cut ? 'visible' : 'none');
   map.setLayoutProperty('holes', 'visibility', cut ? 'none' : 'visible');
   $<HTMLInputElement>('cutout').checked = cut;
-  for (const k of ['tree', 'treerow']) map.setLayoutProperty(k, 'visibility', !on && !is3d ? 'visible' : 'none');
-  // The button shows the view you're in; tapping moves to the next.
-  $('viewtoggle').textContent = state.view === '3d' ? '3D' : on ? 'Sat' : '2D';
+  // The button lights up while satellite is on.
+  $('viewtoggle').setAttribute('aria-pressed', String(on));
   $<HTMLInputElement>('sat').checked = on;
 }
 $<HTMLInputElement>('cutout').onchange = (e) => {

@@ -9,7 +9,6 @@ Vanilla TypeScript + Vite, MapLibre GL, turf.js. Works offline once a course is 
 npm install
 npm run dev        # http://localhost:5173 (use --host URL on your phone, same wifi)
 npm test           # yardage, hazards, layups, scorecard and pace tests against Allenmore data
-# The "Auburn GC (test)" button in the app looks up Auburn Golf Course (Auburn, WA) by name and remembers its id.
 npm run build      # static site in dist/
 ```
 
@@ -53,11 +52,8 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 - **Pace of play**: the round clock starts when GPS first puts you on a tee (or when you first score, mark
   a shot or set a pin). Each hole gets a share of the target (default 4:15 for 18, weighted 11/14/17 for
   par 3/4/5), and the status line shows minutes ahead or behind. Target is in the menu.
-- **3D view** (default; the view button cycles 3D → 2D → Sat): the drawn map tilted 50° as if standing behind
-  the tee, framed so tee, green and you all fit. Trees get a trunk and two-tier crown sized from their position
-  (`src/scenery3d.ts`), tree rows and woods are raised too. Green view is always flat for placing the pin.
-- **2D map view**: a drawn course map with woods, single trees, tree rows, scrub, buildings
-  (slightly raised, so they show in the flyover), roads, paths, cart paths and streams from OSM, plus outlined
+- **Map view** (the Sat button turns satellite on and off; satellite is the default): a flat drawn course
+  map with woods, single trees, tree rows, scrub, buildings, roads, paths, cart paths and streams from OSM, plus outlined
   bunkers and water. Satellite view hides the scenery since the photo shows it. Courses saved before this
   are re-fetched quietly the next time they're opened online (`COURSE_DATA_VERSION` in `src/course.ts`).
 - **Offline** (`public/sw.js`): app shell precached on first visit; satellite tiles cached as viewed, and
@@ -69,10 +65,10 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
   Failures show one plain message with a Try again button.
 - **Hole view orientation**: each hole is rotated so it runs bottom to top when the map is taller than wide
   (portrait) and left to right when wider (landscape), and zoomed so tee to green fills the screen around the
-  overlays (`fitPoints` in `src/main.ts`; turning the device re-fits). Landscape uses a gentler 3D tilt and a
+  overlays (`fitPoints` in `src/main.ts`; turning the device re-fits). Landscape uses a
   narrower yardage column; phones on their side get a compact header, numbers and a one-row tab bar.
 - **Hole cutout and zoom as you play** (`src/cutout.ts`): everything outside the current hole (line of play
-  ±42 m, green ±20 m) is darkened, and raised trees are limited to the hole (Menu → "Cut out the hole" turns it off).
+  ±42 m, green ±20 m) is darkened(Menu → "Cut out the hole" turns it off).
   Landscape runs the hole from the bottom-left to the top-right corner. With GPS on the hole, the view frames only
   what's left (you → green) and re-frames every ~10 yd as you walk; inside 100 yd it becomes a flat close-up of the
   green with a line to the pin and its yardage. Panning or zooming by hand pauses this until Recenter or the next hole.
@@ -85,7 +81,7 @@ Or open `/?sim=47.2404,-122.4764` (lat,lon).
 - **Landscape layout**: front / center / back sit in a floating card at the top of the map (left of the white map
   buttons), and the tabs become a right-hand rail, so the hole gets almost the whole screen.
 - **Loading bar**: opening or refreshing a course shows a progress bar through each stage (find the course,
-  download, build holes, save, build 3D scenery). Overpass sends no size, so the download stage eases toward
+  download, build holes, save). Overpass sends no size, so the download stage eases toward
   its end by bytes received. Offline map downloads use the same bar.
 - **Clear cache and reset app** (Menu → Reset): after a confirm, clears localStorage (courses, rounds,
   settings), all Cache Storage (offline maps, app shell), any cookies, and the service worker, then reloads.
