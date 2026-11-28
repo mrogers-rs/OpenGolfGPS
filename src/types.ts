@@ -28,6 +28,8 @@ export interface Course {
   /** GeoJSON for drawing: polygons/lines with properties.kind. */
   features: GeoJSON.FeatureCollection;
   fetchedAt: number;
+  /** Set when the course came from the OpenStreetMap data built into the app: that data's date. */
+  snapshotAt?: string;
   /** Data version; courses saved before scenery was loaded have none. */
   v?: number;
 }
