@@ -17,6 +17,7 @@ import { initCard, renderCard } from './card.ts';
 import { initScore, openScore, renderScore, scoreOpen } from './score.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 import { applyEdits, closeRing, completeEdits, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
+import { playFlyover, addFlyLayers } from './flyover.ts';
 import { BUILTIN, bundledEdits, bundledSnapshot, hasSnapshot } from './courses/builtin.ts';
 
 /** A hole picked more than this long ago is treated as a new round on reopen. */
@@ -501,36 +502,48 @@ function fitGreen(h: Hole) {
 }
 
 // ---------- Flyover ----------
+// Golf-sim style: the drawn map in 3D, a low shot camera following the line of play (tee -> dogleg marks -> pin)
+// and a ball flying each shot. Tap anywhere to stop; your view (satellite or map) comes back afterwards.
 let flying = false;
+let flight: { stop: () => void } | null = null;
+/** Layers that only make sense on the flat hole view. */
+const FLAT_ONLY = ['cutout', 'cutout-edge', 'holes', 'arcs', 'hole-line', 'pinline', 'measure-casing', 'measure-line', 'tree', 'tree-shadow', 'treerow'];
 async function flyover() {
   const h = hole();
-  if (!h || flying) return;
+  if (!h || flying || !course) return;
   flying = true;
   $('fly').setAttribute('aria-pressed', 'true');
-  const pts = [...h.line.slice(0, -1), h.center];
-  const stop = () => { flying = false; };
-  map.once('touchstart', stop);
-  map.once('mousedown', stop);
-  const ease = (o: maplibregl.EaseToOptions) => new Promise<void>((res) => { map.once('moveend', () => res()); map.easeTo(o); });
+  document.body.classList.add('flying');
+  $('flyhud').hidden = false;
+  const vis = FLAT_ONLY.map((id) => [id, map.getLayoutProperty(id, 'visibility') ?? 'visible'] as const);
+  applyView(false);
+  for (const id of FLAT_ONLY) map.setLayoutProperty(id, 'visibility', 'none');
+  map.setMaxPitch(80);
+  map.resize();
+  const f = playFlyover(map, h, pinOf(h) ?? h.center, course.features, $<HTMLCanvasElement>('flycanvas'), {
+    hole: $('fh-hole'), big: $('fh-big'), lbl: $('fh-lbl'), sub: $('fh-sub'),
+  });
+  flight = f;
   try {
-    await ease({ center: pts[0], zoom: 17.5, pitch: 60, bearing: turf.bearing(pts[0], pts[1]), duration: 900 });
-    for (let i = 1; i < pts.length && flying; i++) {
-      const len = turf.distance(pts[i - 1], pts[i], { units: 'meters' });
-      const last = i === pts.length - 1;
-      const bearing = turf.bearing(pts[i - 1], pts[i]);
-      // Stop a little short of the green so it fills the screen.
-      const center = last ? (turf.destination(pts[i], 35, bearing + 180, { units: 'meters' }).geometry.coordinates as LngLat) : pts[i];
-      await ease({ center, bearing, zoom: last ? 18.6 : 17.5, pitch: last ? 55 : 60, duration: Math.max(1200, len * 14), easing: (t) => t });
-    }
-    if (flying) await new Promise((r) => setTimeout(r, 1200));
+    await f.finished;
   } finally {
+    flight = null;
     flying = false;
     $('fly').setAttribute('aria-pressed', 'false');
-    map.off('touchstart', stop);
-    map.off('mousedown', stop);
+    document.body.classList.remove('flying');
+    $('flyhud').hidden = true;
+    map.resize();
+    map.jumpTo({ pitch: 0 });
+    map.setMaxPitch(60);
+    applyView();
+    for (const [id, v] of vis) map.setLayoutProperty(id, 'visibility', v);
+    render();
     greenView ? fitGreen(h) : fitHole(h);
   }
 }
+function stopFlyover() { flight?.stop(); }
+$('flycanvas').addEventListener('pointerdown', stopFlyover);
+$('flyhud').addEventListener('pointerdown', stopFlyover);
 
 /** Nothing to show (a hole you're still mapping): blank numbers and markers. */
 function clearHole() {
@@ -617,7 +630,7 @@ function renderPinLine(h: Hole, me: LngLat | null, pin: LngLat | null | undefine
   const near = me && !greenView && yd(me, h.center) <= APPROACH_YD;
   (map.getSource('pinline') as GeoJSONSource | undefined)?.setData(near ? turf.lineString([me!, to]) : turf.featureCollection([]));
   // The measure legs replace the dashed line of play while a target is down.
-  map.setLayoutProperty('hole-line', 'visibility', near || shownTarget ? 'none' : 'visible');
+  if (!flying) map.setLayoutProperty('hole-line', 'visibility', near || shownTarget ? 'none' : 'visible');
   if (!near) { pinLabel.remove(); return; }
   const d = yd(me!, to);
   // Just short of the pin, so it sits on the green close-up.
@@ -785,7 +798,7 @@ $('next').onclick = () => goHole(state.hole + 1, true);
 $('recenter').onclick = () => { if (editing) return editFrame(); const h = hole(); if (h) { userMoved = false; greenView ? fitGreen(h) : fitHole(h); } };
 $('m-clear').onclick = () => { target = null; targetCleared = true; render(); };
 $('greenview').onclick = () => { const h = hole(); if (!h) return; greenView = !greenView; target = null; showHole(true); };
-$('fly').onclick = () => { if (flying) flying = false; else flyover(); };
+$('fly').onclick = () => { if (flying) stopFlyover(); else flyover(); };
 initCard({
   course: () => course,
   hole,
@@ -1334,8 +1347,9 @@ function setView(v: store.MapView) {
   const h = hole();
   if (h) greenView ? fitGreen(h) : fitHole(h);
 }
-function applyView() {
-  const on = state.satellite;
+/** `sat` overrides the saved choice without saving it (the flyover shows the drawn map). */
+function applyView(sat = state.satellite) {
+  const on = sat;
   map.setLayoutProperty('sat', 'visibility', on ? 'visible' : 'none');
   map.setPaintProperty('bg', 'background-color', on ? '#0d2a14' : MAP.bg);
   for (const k of GOLF_FILLS) map.setPaintProperty(k, 'fill-opacity', on ? 0.18 : 0.95);
@@ -1381,6 +1395,7 @@ function esc(s: string) {
 
 // ---------- Start ----------
 map.on('load', () => {
+  addFlyLayers(map, 'green-line');
   applyView();
   // Start with the attribution collapsed to its (i) button so it doesn't cover the map.
   const attrib = document.querySelector('.maplibregl-ctrl-attrib');

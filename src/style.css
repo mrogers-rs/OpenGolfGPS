@@ -686,3 +686,24 @@ body.editing #topar { display: none !important; }
   .topar { min-width: 96px; min-height: 76px; }
   .topar b { font-size: 36px; }
 }
+
+/* ---------- Golf-sim flyover ---------- */
+#flycanvas, #flyhud { display: none; }
+body.flying { --sx: 1; }
+body.flying #mapwrap { position: fixed; inset: 0; z-index: 40; }
+body.flying #map { background: #478a43; }
+body.flying #tools, body.flying #measure, body.flying #greeninfo, body.flying .maplibregl-marker, body.flying .maplibregl-ctrl-bottom-right, body.flying .maplibregl-ctrl-bottom-left { display: none !important; }
+body.flying #flycanvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: auto; cursor: pointer; }
+body.flying #flyhud:not([hidden]) { display: block; position: absolute; inset: 0; pointer-events: none; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; color: #fff; }
+#fh-hole { position: absolute; top: calc(env(safe-area-inset-top) + 14px); left: calc(env(safe-area-inset-left) + 14px); display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto; column-gap: 10px; align-items: center; padding: 10px 16px 10px 12px; border-radius: 16px; background: rgba(8,20,12,.78); border: 1px solid rgba(255,255,255,.18); box-shadow: 0 6px 20px rgba(0,0,0,.35); backdrop-filter: blur(6px); }
+#fh-hole b { grid-row: 1 / 3; font-size: 44px; line-height: 1; font-weight: 900; color: #ffd400; min-width: 1.1em; text-align: center; }
+#fh-hole span { font-size: 13px; letter-spacing: .14em; font-weight: 800; opacity: .8; }
+#fh-hole i { font-style: normal; font-size: 17px; font-weight: 800; }
+#fh-shot { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 54px); transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; min-width: 170px; padding: 10px 22px 12px; border-radius: 18px; background: rgba(8,20,12,.78); border: 1px solid rgba(255,255,255,.18); box-shadow: 0 6px 20px rgba(0,0,0,.35); backdrop-filter: blur(6px); }
+#fh-lbl { font-size: 13px; letter-spacing: .16em; font-weight: 800; color: #ffd400; }
+#fh-big { font-size: 56px; line-height: 1; font-weight: 900; font-variant-numeric: tabular-nums; }
+#fh-big::after { content: ' yd'; font-size: 20px; font-weight: 700; opacity: .75; }
+#fh-sub { font-size: 15px; font-weight: 700; opacity: .85; margin-top: 2px; }
+#fh-skip { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 16px); transform: translateX(-50%); font-size: 14px; font-weight: 700; padding: 6px 14px; border-radius: 999px; background: rgba(0,0,0,.45); white-space: nowrap; }
+@media (min-width: 768px) and (min-height: 600px) { #fh-hole b { font-size: 56px; } #fh-big { font-size: 72px; } #fh-shot { min-width: 220px; } }
+@media (orientation: landscape) and (max-height: 500px) { #fh-shot { left: auto; right: calc(env(safe-area-inset-right) + 14px); bottom: 14px; transform: none; padding: 6px 16px 8px; } #fh-big { font-size: 42px; } #fh-skip { bottom: 10px; } }
