@@ -88,3 +88,33 @@ test('default drive crosshair moves to the middle of an offset fairway', async (
   const off = turf.pointToLineDistance(t, shifted, { units: 'meters' });
   assert.ok(off < 6, `off fairway middle by ${off.toFixed(1)} m`);
 });
+
+test('the cutout is shaped like the hole: wider where drives land, narrow off the tee', () => {
+  const h = course.holes.find((x) => x.par === 4 && yd(x.line[0], x.center) > 330)!;
+  const c = holeCorridor(h, course.features.features, course.holes);
+  const line = turf.lineString([...h.line.slice(0, -1), h.center]);
+  const width = (s: number) => {
+    const p = turf.along(line, s, { units: 'meters' });
+    const b = turf.bearing(p, turf.along(line, s + 2, { units: 'meters' }));
+    let w = 0;
+    for (const side of [-90, 90]) for (let d = 0; d < 80; d += 1) if (turf.booleanPointInPolygon(turf.destination(p, d, b + side, { units: 'meters' }), c)) w = Math.max(w, d);
+    return w;
+  };
+  assert.ok(width(200) > width(70) + 8, `landing ${width(200)} vs carry ${width(70)}`);
+  assert.ok(c.geometry.type === 'Polygon', 'one piece');
+});
+
+test('a traced fairway is followed and a neighbor hole\'s bunker stays out', () => {
+  const h = course.holes.find((x) => x.par === 4 && yd(x.line[0], x.center) > 330)!;
+  const b = turf.bearing(h.line[0], h.center);
+  const line = turf.lineString([...h.line.slice(0, -1), h.center]);
+  // A fairway bulging 45 m to the right at 180-230 m, traced for this hole.
+  const at = (s: number, off: number) => turf.destination(turf.along(line, s, { units: 'meters' }), off, b + 90, { units: 'meters' }).geometry.coordinates;
+  const ring = [at(150, -15), at(260, -15), at(260, 55), at(150, 55), at(150, -15)];
+  const fw = turf.polygon([ring], { kind: 'fairway', hole: h.ref });
+  const c = holeCorridor(h, [...course.features.features, fw], course.holes);
+  assert.ok(turf.booleanPointInPolygon(at(205, 50), c), 'fairway edge inside');
+  // The same fairway traced for another hole doesn't change this one.
+  const other = turf.polygon([ring], { kind: 'fairway', hole: h.ref + 100 });
+  assert.ok(!turf.booleanPointInPolygon(at(205, 50), holeCorridor(h, [...course.features.features, other], course.holes)));
+});

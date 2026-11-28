@@ -16,7 +16,7 @@ import { type Round, newRound, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MI
 import { initCard, renderCard } from './card.ts';
 import { initScore, openScore, renderScore, scoreOpen } from './score.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
-import { applyEdits, closeRing, completeEdits, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
+import { applyEdits, closeRing, completeEdits, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits, type HazardKind } from './edits.ts';
 import { BUILTIN, bundledEdits } from './courses/builtin.ts';
 
 /** A hole picked more than this long ago is treated as a new round on reopen. */
@@ -35,7 +35,7 @@ let lastFixAt = 0;
 let round: Round | null = null;
 let greenView = false;
 /** Course editor state (see Course editor below); null when not editing. */
-type Tool = 'tee' | 'green' | 'dogleg' | 'bunker' | 'water' | 'tree' | 'woods';
+type Tool = 'tee' | 'green' | 'dogleg' | 'fairway' | 'bunker' | 'water' | 'tree' | 'woods';
 let editing: { ref: number; tool: Tool | null; pts: LngLat[]; sel: string | null } | null = null;
 /** A round older than this (since its start) isn't resumed. */
 const ROUND_MAX_MS = 14 * 3600 * 1000;
@@ -100,8 +100,8 @@ const map = new maplibregl.Map({
       { id: 'measure-casing', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.55 } },
       { id: 'measure-line', type: 'line', source: 'measure', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['match', ['get', 'leg'], 'to', '#ffd400', '#ffffff'], 'line-width': 5 } },
       // Course editor: shapes you've marked (outlined) and the one you're drawing.
-      { id: 'edit-fill', type: 'fill', source: 'edit', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['match', ['get', 'kind'], 'green', '#8eef80', 'bunker', '#efe1a8', 'water', '#3a8de4', 'wood', '#2e7432', '#fff'], 'fill-opacity': ['case', ['==', ['get', 'drawing'], true], 0.45, 0.3] } },
-      { id: 'edit-line', type: 'line', source: 'edit', filter: ['!=', ['geometry-type'], 'Point'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['case', ['==', ['get', 'sel'], true], '#ff3b30', ['==', ['get', 'drawing'], true], '#ffd400', ['match', ['get', 'kind'], 'green', '#b6ffad', 'bunker', '#fff3c4', 'water', '#9cc9ff', 'wood', '#7be07f', 'line', '#ffffff', '#fff']], 'line-width': ['case', ['any', ['==', ['get', 'sel'], true], ['==', ['get', 'drawing'], true]], 3.5, 2.5] } },
+      { id: 'edit-fill', type: 'fill', source: 'edit', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['match', ['get', 'kind'], 'green', '#8eef80', 'fairway', '#69c25b', 'bunker', '#efe1a8', 'water', '#3a8de4', 'wood', '#2e7432', '#fff'], 'fill-opacity': ['case', ['==', ['get', 'drawing'], true], 0.45, 0.3] } },
+      { id: 'edit-line', type: 'line', source: 'edit', filter: ['!=', ['geometry-type'], 'Point'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['case', ['==', ['get', 'sel'], true], '#ff3b30', ['==', ['get', 'drawing'], true], '#ffd400', ['match', ['get', 'kind'], 'green', '#b6ffad', 'fairway', '#d6ff9e', 'bunker', '#fff3c4', 'water', '#9cc9ff', 'wood', '#7be07f', 'line', '#ffffff', '#fff']], 'line-width': ['case', ['any', ['==', ['get', 'sel'], true], ['==', ['get', 'drawing'], true]], 3.5, 2.5] } },
       { id: 'edit-pts', type: 'circle', source: 'edit', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 16, ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 'tree', 4, 6], 20, ['match', ['get', 'kind'], 'tee', 11, 'dogleg', 8, 'tree', 40, 6]], 'circle-color': ['match', ['get', 'kind'], 'tee', '#2f7bff', 'dogleg', '#ffd400', 'tree', '#2e7432', '#ffd400'], 'circle-opacity': ['match', ['get', 'kind'], 'tree', 0.75, 1], 'circle-stroke-color': ['case', ['==', ['get', 'sel'], true], '#ff3b30', ['==', ['get', 'kind'], 'tree'], '#b6ffad', '#000'], 'circle-stroke-width': ['case', ['==', ['get', 'sel'], true], 3, 2] } },
     ],
   },
@@ -270,7 +270,7 @@ let targetCleared = false;
 /** Darkens everything but the current hole (when the cutout is on). */
 function updateCutout(h: Hole) {
   const on = state.cutout !== false && !editing;
-  const corridor = holeCorridor(h);
+  const corridor = holeCorridor(h, course?.features.features, course?.holes);
   (map.getSource('cutout') as GeoJSONSource).setData(on ? holeMask(corridor) : turf.featureCollection([]));
 }
 
@@ -823,13 +823,14 @@ const HINTS: Record<Tool | 'none', string> = {
   tee: 'Tap where you tee off. Tap again to move it.',
   green: 'Tap around the edge of the green, then Finish.',
   dogleg: 'Tap the aiming point at the corner (up to 2). Clear for a straight hole.',
+  fairway: 'Tap around the edge of the fairway, then Finish. The hole cutout follows it.',
   bunker: 'Tap around the edge of the bunker, then Finish.',
   water: 'Tap around the edge of the water, then Finish.',
   tree: 'Tap each tree.',
   woods: 'Tap around the edge of the trees, then Finish.',
 };
 /** Tools that draw an outline (tap around the edge, then Finish), and the shape each one makes. */
-const OUTLINE: Partial<Record<Tool, 'green' | 'bunker' | 'water' | 'wood'>> = { green: 'green', bunker: 'bunker', water: 'water', woods: 'wood' };
+const OUTLINE: Partial<Record<Tool, 'green' | 'fairway' | 'bunker' | 'water' | 'wood'>> = { green: 'green', fairway: 'fairway', bunker: 'bunker', water: 'water', woods: 'wood' };
 
 /** Your edits for the open course, starting from the built-in course file if there is one. */
 function myEdits(): CourseEdits {
@@ -949,7 +950,8 @@ function editFinish() {
     (e.holes[String(editing.ref)] ??= {}).green = ring;
     editing.tool = null; // one green per hole
   } else {
-    e.hazards.push({ id: newId(), kind: OUTLINE[editing.tool] as 'bunker' | 'water' | 'wood', ring });
+    const kind = OUTLINE[editing.tool] as HazardKind;
+    e.hazards.push({ id: newId(), kind, ring, ...(kind === 'fairway' ? { hole: editing.ref } : {}) });
   }
   editing.pts = [];
   commit(e);

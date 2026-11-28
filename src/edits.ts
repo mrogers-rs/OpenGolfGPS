@@ -4,8 +4,8 @@
 import * as turf from '@turf/turf';
 import type { Course, Hole, LngLat } from './types.ts';
 
-/** Outlined shapes: hazards (bunker, water) and woods / groups of trees. */
-export type HazardKind = 'bunker' | 'water' | 'wood';
+/** Outlined shapes: hazards (bunker, water), woods / groups of trees, and fairways. */
+export type HazardKind = 'bunker' | 'water' | 'wood' | 'fairway';
 
 export interface HoleEdit {
   par?: number;
@@ -22,6 +22,8 @@ export interface HazardEdit {
   kind: HazardKind;
   /** Outline, closed ring. */
   ring: LngLat[];
+  /** Fairways: the hole it belongs to (the hole cutout follows it). */
+  hole?: number;
 }
 
 export interface TreeEdit {
@@ -101,7 +103,7 @@ export function applyEdits(base: Course, edits: CourseEdits | null): Course {
     const e = edits.holes[String(h.ref)];
     if (e.green && e.green.length >= 4) features.push(turf.polygon([e.green], { kind: 'green', edited: true }));
   }
-  for (const z of edits.hazards) if (z.ring.length >= 4) features.push(turf.polygon([z.ring], { kind: z.kind, edited: true, hid: z.id }));
+  for (const z of edits.hazards) if (z.ring.length >= 4) features.push(turf.polygon([z.ring], { kind: z.kind, edited: true, hid: z.id, ...(z.hole != null ? { hole: z.hole } : {}) }));
   for (const t of edits.trees ?? []) features.push(turf.point(t.at, { kind: 'tree', edited: true, hid: t.id }));
 
   const fc = turf.featureCollection(features);
@@ -139,7 +141,7 @@ export function parseEditsFile(text: string): CourseEdits {
     if (h.green && !(Array.isArray(h.green) && h.green.every(pt))) throw new Error(`Hole ${k}: bad green.`);
     if (h.dogleg && !(Array.isArray(h.dogleg) && h.dogleg.every(pt))) throw new Error(`Hole ${k}: bad dogleg.`);
   }
-  for (const z of j.hazards) if (!(z && (z.kind === 'bunker' || z.kind === 'water' || z.kind === 'wood') && Array.isArray(z.ring) && z.ring.every(pt))) throw new Error('Bad shape in file.');
+  for (const z of j.hazards) if (!(z && (z.kind === 'bunker' || z.kind === 'water' || z.kind === 'wood' || z.kind === 'fairway') && Array.isArray(z.ring) && z.ring.every(pt))) throw new Error('Bad shape in file.');
   if (j.trees != null && !(Array.isArray(j.trees) && j.trees.every((t: any) => t && typeof t.id === 'string' && pt(t.at)))) throw new Error('Bad tree in file.');
   return j as CourseEdits;
 }
