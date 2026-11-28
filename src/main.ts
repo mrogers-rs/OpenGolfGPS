@@ -15,6 +15,7 @@ import { SAT_URL, SAT_ATTRIB, prefetchTiles } from './tiles.ts';
 import { hazardNumbers } from './hazards.ts';
 import { type Round, newRound, pace, fmtClock, totals, fmtToPar, DEFAULT_PACE_MIN } from './round.ts';
 import { initCard, renderCard } from './card.ts';
+import { initScore, openScore, renderScore, scoreOpen } from './score.ts';
 import { greenNumbers, measure, yd, pathYd, MAX_GPS_YD, greenEdges } from './yardage.ts';
 import { applyEdits, closeRing, completeEdits, editableRefs, emptyEdits, parseEditsFile, progressOf, roundPt, type CourseEdits } from './edits.ts';
 import { BUILTIN, bundledEdits } from './courses/builtin.ts';
@@ -126,7 +127,36 @@ function line(id: string, kind: string, color: string, width: any, dash?: number
   return { id, type: 'line', source: 'course', filter: ['==', ['get', 'kind'], kind], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': color, 'line-width': width, ...(dash ? { 'line-dasharray': dash } : {}) } };
 }
 
-const playerMarker = new maplibregl.Marker({ element: el('dot-player') });
+// You: a golf cart seen from above, nose pointing the way you're heading.
+const CART_SVG = `<svg class="cart" viewBox="0 0 36 52" aria-hidden="true">
+  <rect x="2" y="7" width="7" height="11" rx="2.5" fill="#111"/><rect x="27" y="7" width="7" height="11" rx="2.5" fill="#111"/>
+  <rect x="2" y="34" width="7" height="11" rx="2.5" fill="#111"/><rect x="27" y="34" width="7" height="11" rx="2.5" fill="#111"/>
+  <rect x="6" y="3" width="24" height="46" rx="8" fill="#fff" stroke="#0b130d" stroke-width="1.5"/>
+  <path d="M9 7.5q9-4 18 0v6H9z" fill="#2a8cff"/>
+  <rect x="8.5" y="14" width="19" height="25" rx="4" fill="#1f8a3b" stroke="#0b130d" stroke-width="1"/>
+  <path d="M10 41h16v5a3 3 0 0 1-3 3H13a3 3 0 0 1-3-3z" fill="#cfd6d1"/>
+  <path d="M18 0l5 5h-10z" fill="#ffd400" stroke="#0b130d" stroke-width="1"/>
+</svg>`;
+const playerEl = el('cart-player');
+playerEl.firstElementChild!.innerHTML = CART_SVG;
+const playerMarker = new maplibregl.Marker({ element: playerEl });
+/** Direction of travel (degrees from north), from the last spot at least a few yards back. */
+let heading: number | null = null;
+let headingFrom: LngLat | null = null;
+function updateHeading(p: LngLat) {
+  if (!headingFrom) { headingFrom = p; return; }
+  if (yd(headingFrom, p) < 4) return; // GPS jitter while parked
+  heading = turf.bearing(headingFrom, p);
+  headingFrom = p;
+}
+/** Turns the cart on screen to match its heading (or toward the green until you've moved). */
+function aimCart() {
+  const svg = playerEl.querySelector<SVGElement>('svg.cart');
+  if (!svg || !player) return;
+  const h = hole();
+  const dir = heading ?? (h ? turf.bearing(player, h.center) : 0);
+  svg.style.transform = `rotate(${dir - map.getBearing()}deg)`;
+}
 const targetMarker = new maplibregl.Marker({ element: crosshair(), draggable: true });
 const flagMarker = new maplibregl.Marker({ element: el('flag', '⛳'), anchor: 'bottom-left', offset: [-4, 0] });
 const frontMarker = new maplibregl.Marker({ element: el('edge') });
@@ -522,6 +552,7 @@ function render() {
   renderArcs(h, me);
   renderGreenInfo(h, n.frontPt, n.backPt);
   renderPace();
+  aimCart();
 
   // Your crosshair if you placed one, else the default drive spot from the tee (par 4/5) unless you cleared it.
   shownTarget = editing ? null : target ?? (!targetCleared && !greenView ? driveTarget(h, fairwayPolys, me, state.drive ?? DEFAULT_DRIVE_YD) : null);
@@ -604,7 +635,13 @@ function renderGreenInfo(h: Hole, frontPt: LngLat, backPt: LngLat) {
 
 function renderPace() {
   const t = round ? totals(round) : null;
-  $('cardlbl').textContent = t?.holes ? `Card ${fmtToPar(t.toPar)}` : 'Card';
+  // Score to par on the hole view (not total strokes).
+  const tp = $('topar');
+  tp.className = 'tab ' + (t?.holes ? (t.toPar < 0 ? 'under' : t.toPar > 0 ? 'over' : 'even') : 'even');
+  $('topar-n').textContent = t?.holes ? fmtToPar(t.toPar) : 'E';
+  $('topar-thru').textContent = t?.holes ? `THRU ${t.holes}` : 'SCORE';
+  tp.setAttribute('aria-label', t?.holes ? `Score ${fmtToPar(t.toPar)} through ${t.holes} holes. Tap to enter scores.` : 'Enter scores');
+  if (scoreOpen()) renderScore();
   // Pace banner across the top: green on pace or ahead, amber a little behind, red well behind.
   const el2 = $('pace');
   const wasHidden = el2.hidden;
@@ -662,6 +699,7 @@ function onPosition(p: LngLat, acc: number) {
   accuracy = acc;
   lastFixAt = Date.now();
   playerMarker.setLngLat(p).addTo(map);
+  updateHeading(p);
   if (course) {
     if (first && !editing && Date.now() - state.holeSetAt > ROUND_RESET_MS) {
       const at = holeAtStart(course.holes, p);
@@ -673,7 +711,13 @@ function onPosition(p: LngLat, acc: number) {
     }
     if (state.auto && !editing) {
       const nxt = autoAdvance(course.holes, state.hole, p);
-      if (nxt != null) return goHole(nxt, false);
+      if (nxt != null) {
+        // Left the hole for the next tee: score the hole you just finished.
+        const done = state.hole;
+        goHole(nxt, false);
+        openScore(done, true);
+        return;
+      }
     }
   }
   render();
@@ -734,7 +778,19 @@ initCard({
   finishRound: () => { if (round) { round.finishedAt = Date.now(); store.saveRound(round); round = null; state.roundId = undefined; store.saveState(state); showHole(false); } },
   goHole: (i) => goHole(i, true),
   changed: () => render(),
+  openScore: (i) => openScore(i),
 });
+initScore({
+  course: () => course,
+  current: () => state.hole,
+  round: getRound,
+  save: saveRound,
+  changed: () => render(),
+  goHole: (i) => goHole(i, true),
+  openCard: () => { renderCard(); $<HTMLDialogElement>('cardsheet').showModal(); },
+});
+$('topar').onclick = () => openScore(state.hole);
+map.on('rotate', aimCart);
 setInterval(() => { if (round && document.visibilityState === 'visible') renderPace(); }, 30000);
 const autoBtn = $('auto');
 const syncAuto = () => autoBtn.setAttribute('aria-pressed', String(state.auto));

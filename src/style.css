@@ -575,3 +575,114 @@ body.editing #app { grid-template-areas: 'brand' 'pace' 'nums' 'map'; grid-templ
   #editbar button { min-height: 58px; font-size: 18px; }
   #e-hint { font-size: 17px; }
 }
+
+/* ---------- You: golf cart ---------- */
+.cart-player { width: 30px; height: 44px; }
+.cart-player svg { width: 100%; height: 100%; display: block; transition: transform .4s ease; filter: drop-shadow(0 2px 3px rgba(0,0,0,.7)); }
+@media (min-width: 768px) and (min-height: 600px) { .cart-player { width: 36px; height: 52px; } }
+
+/* ---------- Score to par on the hole view (middle of the tab bar) ---------- */
+#tabs { grid-template-columns: 1fr 1fr 1fr; }
+#tabs .tab#topar { flex-direction: column; justify-content: center; gap: 1px; color: #fff; border: none; margin: 0 6px; }
+#topar b { font-size: 28px; line-height: 1; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+#topar span { font-size: 10px; letter-spacing: .08em; font-weight: 800; opacity: .9; }
+#tabs .tab#topar.even { background: #1b2a1f; }
+#tabs .tab#topar.under { background: #c8102e; }
+#tabs .tab#topar.over { background: #1d4fa8; }
+#tabs .tab#topar:active { background: #ffd400; color: #000; }
+@media (min-width: 768px) and (min-height: 600px) { #topar b { font-size: 36px; } #topar span { font-size: 12px; } }
+@media (orientation: landscape) and (min-width: 560px) { #tabs { grid-template-columns: 1fr; } #tabs .tab#topar { margin: 0; padding: 10px 0; } }
+@media (orientation: landscape) and (max-height: 500px) { #topar b { font-size: 24px; } }
+body.editing #topar { display: none !important; }
+
+/* ---------- Scoring screen ---------- */
+#scoresheet { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; padding: 0; background: linear-gradient(180deg, #0f2416 0%, #070a08 38%); display: none; flex-direction: column; }
+#scoresheet[open] { display: flex; }
+#scoresheet::backdrop { background: #000; }
+.s-head { display: flex; align-items: center; gap: 6px; padding: calc(var(--safe-t) + 10px) 12px 10px; border-bottom: 1px solid #1a2a1e; }
+.s-nav { width: 56px; min-height: 64px; padding: 0; font-size: 36px; line-height: 1; border: none; background: rgba(255,255,255,.07); border-radius: 16px; }
+.s-nav:disabled { opacity: .25; }
+.s-title { display: flex; flex-direction: column; align-items: center; min-width: 72px; }
+.s-title b { font-size: 44px; line-height: 1; font-weight: 800; }
+.s-title #s-par { font-size: 15px; color: var(--accent); font-weight: 800; margin-top: 2px; }
+.topar { margin-left: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 74px; min-height: 64px; border-radius: 16px; padding: 4px 10px; background: #1b2a1f; }
+.topar b { font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.topar span { font-size: 11px; color: rgba(255,255,255,.85); letter-spacing: .04em; white-space: nowrap; }
+.topar.under { background: #c8102e; } .topar.over { background: #1d4fa8; }
+.s-x { width: 56px; min-height: 64px; padding: 0; font-size: 24px; border: none; background: rgba(255,255,255,.07); border-radius: 16px; }
+.s-body { flex: 1; overflow-y: auto; padding: 6px 14px 10px; display: flex; flex-direction: column; gap: 4px; -webkit-overflow-scrolling: touch; }
+.s-sec h4 { margin: 10px 2px 6px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.s-grid { display: grid; gap: 8px; }
+.s-grid button { min-height: 60px; border-radius: 16px; background: #161d18; border: 2px solid #2b352e; font-size: 24px; font-weight: 800; padding: 4px; }
+.s-grid button.on { background: var(--accent); color: #000; border-color: var(--accent); }
+.s-strokes { grid-template-columns: repeat(5, 1fr); }
+.s-strokes button { min-height: 66px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.s-strokes button b { font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.s-strokes button small { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .03em; }
+.s-strokes button.is-par { border-color: #4a7a57; }
+.s-strokes button.birdie small, .s-strokes button.eagle small { color: #ff7b8c; }
+.s-strokes button.on small { color: #000; }
+.s-strokes button.on.birdie, .s-strokes button.on.eagle { background: #e0263f; border-color: #e0263f; color: #fff; }
+.s-strokes button.on.birdie small, .s-strokes button.on.eagle small { color: #fff; }
+.s-strokes button.on.bogey, .s-strokes button.on.double { background: #2f6fe0; border-color: #2f6fe0; color: #fff; }
+.s-strokes button.on.bogey small, .s-strokes button.on.double small { color: #fff; }
+.s-putts { grid-template-columns: repeat(5, 1fr); }
+.s-fw { grid-template-columns: 1fr 1.3fr 1fr; }
+.s-fw button { min-height: 72px; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 19px; }
+.s-fw svg { width: 26px; height: 26px; flex: none; }
+.s-fw button.fw-hit.on { background: #2fbf5a; border-color: #2fbf5a; color: #000; }
+.gir { width: 100%; min-height: 72px; margin-top: 10px; display: flex; align-items: center; gap: 14px; padding: 8px 16px; border-radius: 16px; background: #161d18; border: 2px solid #2b352e; font-size: 20px; font-weight: 800; text-align: left; }
+.gir .tick { width: 36px; height: 36px; flex: none; border-radius: 50%; border: 3px solid #5b6b5f; }
+.gir.on { background: #2fbf5a; border-color: #2fbf5a; color: #000; }
+.gir.on .tick { border-color: #000; background: #000 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5' fill='none' stroke='%232fbf5a' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 26px no-repeat; }
+.gir small { margin-left: auto; font-size: 12px; font-weight: 600; opacity: .75; }
+.s-extra { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: end; }
+.s-extra h4 { grid-column: 1 / -1; }
+.s-pen { grid-template-columns: repeat(4, 1fr); }
+.s-grid.s-pen button, .s-grid.s-sand button { min-height: 52px; font-size: 18px; }
+.s-sand button { padding: 4px 14px; }
+.s-foot { display: flex; gap: 10px; padding: 10px 14px calc(var(--safe-b) + 12px); border-top: 1px solid #1a2a1e; background: #070a08; }
+.s-foot button { flex: 1; min-height: 64px; border-radius: 16px; font-size: 19px; font-weight: 800; }
+.s-foot button[hidden] { display: none; }
+.s-foot .s-go { flex: 1.6; background: var(--accent); color: #000; border-color: var(--accent); font-size: 21px; }
+/* Landscape phone: score on the left, the rest on the right, so nothing scrolls. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .s-head { padding-top: 6px; padding-bottom: 6px; }
+  .s-nav, .s-x, .topar { min-height: 46px; }
+  .topar b { font-size: 24px; }
+  .gir small { display: none; }
+  .s-title { flex-direction: row; align-items: baseline; gap: 8px; }
+  .s-title b { font-size: 32px; }
+  .s-body { display: grid; grid-template-columns: 1.1fr 1fr; column-gap: 16px; align-content: start; padding-left: calc(env(safe-area-inset-left, 0px) + 14px); padding-right: calc(env(safe-area-inset-right, 0px) + 14px); }
+  .s-body > .s-sec { grid-column: 2; }
+  .s-body > .s-sec:nth-child(1) { grid-column: 1; grid-row: 1 / span 2; }
+  .s-body > .s-sec:nth-child(2) { grid-column: 1; grid-row: 3 / span 2; }
+  .s-sec h4 { margin: 4px 2px 3px; font-size: 12px; }
+  .s-grid { gap: 6px; }
+  .s-grid button, .s-strokes button { min-height: 48px; }
+  .s-strokes button b { font-size: 24px; }
+  .s-strokes button small { font-size: 10px; }
+  .s-fw button, .gir { min-height: 50px; font-size: 17px; }
+  .s-grid.s-pen button, .s-grid.s-sand button { min-height: 46px; }
+  .gir { margin-top: 4px; }
+  .s-foot { padding-top: 6px; padding-bottom: calc(var(--safe-b) + 6px); }
+  .s-foot button { min-height: 48px; }
+}
+/* Tablet: bigger everything, centered column. */
+@media (min-width: 768px) and (min-height: 600px) {
+  .s-head, .s-body, .s-foot { padding-left: max(24px, calc((100vw - 760px) / 2)); padding-right: max(24px, calc((100vw - 760px) / 2)); }
+  .s-body { gap: 8px; }
+  .s-sec h4 { font-size: 15px; margin-top: 16px; }
+  .s-grid { gap: 12px; }
+  .s-grid button { min-height: 76px; font-size: 28px; border-radius: 18px; }
+  .s-strokes button { min-height: 88px; }
+  .s-strokes button b { font-size: 38px; }
+  .s-strokes button small { font-size: 13px; }
+  .s-fw button { min-height: 88px; font-size: 22px; }
+  .gir { min-height: 88px; font-size: 24px; }
+  .s-foot button { min-height: 76px; font-size: 22px; }
+  .s-title b { font-size: 54px; }
+  .s-nav, .s-x { width: 72px; min-height: 76px; }
+  .topar { min-width: 96px; min-height: 76px; }
+  .topar b { font-size: 36px; }
+}

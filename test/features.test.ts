@@ -114,3 +114,21 @@ test('hazards and layups work from anywhere, including behind the green or on an
     }
   }
 });
+
+test('scoring screen: GIR you mark wins over the worked-out one; score names', async () => {
+  const { scoreName } = await import('../src/round.ts');
+  assert.equal(isGir({ strokes: 4, putts: 2 }, 4), true);
+  assert.equal(isGir({ strokes: 4, putts: 2, gir: false }, 4), false);
+  assert.equal(isGir({ strokes: 5, putts: 1, gir: true }, 4), true);
+  assert.equal(isGir({ gir: true }, 4), true);
+  assert.equal(scoreName(1, 3), 'Ace');
+  assert.equal(scoreName(3, 4), 'Birdie');
+  assert.equal(scoreName(4, 4), 'Par');
+  assert.equal(scoreName(6, 4), 'Double');
+  assert.equal(scoreName(9, 4), '+5');
+  const r = newRound(course);
+  r.holes[1] = { strokes: (course.holes[0].par ?? 4) + 1 };
+  r.holes[2] = { strokes: (course.holes[1].par ?? 4) - 1 };
+  r.holes[3] = { strokes: (course.holes[2].par ?? 4) + 2 };
+  assert.equal(fmtToPar(totals(r).toPar), '+2');
+});
