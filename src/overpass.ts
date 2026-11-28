@@ -212,17 +212,6 @@ async function coursesNearNominatim(p: LngLat, km: number, signal: AbortSignal):
     .sort((a, b) => turf.distance(p, a.center) - turf.distance(p, b.center));
 }
 
-/** Search by name using Nominatim (OSM's geocoder). */
-export async function searchCourses(q: string): Promise<CourseHit[]> {
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=10&q=${encodeURIComponent(q + ' golf')}`;
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`Search failed (HTTP ${res.status})`);
-  const rows: any[] = await res.json();
-  return rows
-    .filter((r) => r.type === 'golf_course' && (r.osm_type === 'way' || r.osm_type === 'relation'))
-    .map((r) => ({ id: `${r.osm_type}/${r.osm_id}`, name: r.name || r.display_name.split(',')[0], where: r.display_name.split(',').slice(1, 4).join(',').trim(), center: [+r.lon, +r.lat] as LngLat }));
-}
-
 /** Fetch a course boundary, then every golf feature in (and slightly around) it. */
 export async function loadCourse(id: string, fallbackName?: string, onProgress?: LoadProgress): Promise<Course> {
   const [type, osmId] = id.split('/');
