@@ -2,7 +2,7 @@
 import * as turf from '@turf/turf';
 import { parseCourse } from './course.ts';
 import type { Course, LngLat, OverpassElement } from './types.ts';
-import { apiCourseHead, apiCourseFeatures, apiCoursesAt } from './osmapi.ts';
+import { apiCourseHead, apiCourseFeatures } from './osmapi.ts';
 
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -97,8 +97,7 @@ export const LOAD_STEPS = {
   find: { from: 0, to: 0.12, label: 'Finding the course' },
   download: { from: 0.12, to: 0.72, label: 'Downloading holes, hazards and trees' },
   build: { from: 0.72, to: 0.86, label: 'Building holes' },
-  save: { from: 0.86, to: 0.9, label: 'Saving for offline' },
-  scenery: { from: 0.9, to: 1, label: 'Building 3D scenery' },
+  save: { from: 0.86, to: 1, label: 'Saving for offline' },
 } as const;
 export type LoadStep = keyof typeof LOAD_STEPS;
 /** Progress callback: overall fraction 0..1 and the stage's text. */
@@ -210,25 +209,6 @@ async function coursesNearNominatim(p: LngLat, km: number, signal: AbortSignal):
     .filter((r) => r.type === 'golf_course' && (r.osm_type === 'way' || r.osm_type === 'relation') && r.name)
     .map((r) => ({ id: `${r.osm_type}/${r.osm_id}`, name: r.name, center: [+r.lon, +r.lat] as LngLat }))
     .sort((a, b) => turf.distance(p, a.center) - turf.distance(p, b.center));
-}
-
-/**
- * The golf course at a known spot (for the built-in test course): asks Overpass, the main OSM API and
- * Nominatim by position, so it doesn't depend on how the course is named. Courses whose name matches
- * `name` come first, then the nearest.
- */
-export async function courseAt(p: LngLat, name?: RegExp): Promise<CourseHit | undefined> {
-  const hits = await race('near', [
-    { name: 'overpass', run: (sig) => coursesNearOverpass(p, 1.5, sig).then(nonEmpty) },
-    { name: 'osm-api', run: (sig) => apiCoursesAt(p[0], p[1], sig).then(nonEmpty) },
-    { name: 'nominatim', run: (sig) => coursesNearNominatim(p, 2, sig).then(nonEmpty) },
-  ], 8000);
-  const score = (h: CourseHit) => (name && name.test(h.name) ? 0 : 1e6) + turf.distance(p, h.center);
-  return hits.sort((a, b) => score(a) - score(b))[0];
-}
-function nonEmpty<T>(a: T[]): T[] {
-  if (!a.length) throw new Error('Course not found in OpenStreetMap near that spot');
-  return a;
 }
 
 /** Search by name using Nominatim (OSM's geocoder). */
