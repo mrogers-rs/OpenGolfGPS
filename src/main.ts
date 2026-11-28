@@ -332,6 +332,16 @@ function goHole(i: number, _manual: boolean) {
   targetCleared = false;
   greenView = false;
   noteArrival();
+  // Simulated location: drop the cart on the new hole's tee, so testing carries on from there.
+  if (sim && !editing) {
+    const tee = course.holes[state.hole].line[0];
+    player = tee;
+    accuracy = 3;
+    lastFixAt = Date.now();
+    heading = null;
+    headingFrom = tee;
+    playerMarker.setLngLat(tee).addTo(map);
+  }
   showHole(true);
 }
 
