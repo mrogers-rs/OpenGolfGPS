@@ -7,6 +7,19 @@ import { BUILTIN } from '../src/courses/list.ts';
 import { apiCourseHead, apiCourseFeatures } from '../src/osmapi.ts';
 import { makeSnapshot } from '../src/courses/snapshot.ts';
 
+// OSM's API asks scripts to name themselves (it answers a bare Node user agent with HTTP 429),
+// and to back off when busy: retry 429/5xx a few times.
+const plainFetch = globalThis.fetch;
+globalThis.fetch = async (input, init = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set('User-Agent', 'OpenGolfGPS course snapshot (https://github.com/mrogers-rs/OpenGolfGPS)');
+  for (let i = 0; ; i++) {
+    const res = await plainFetch(input, { ...init, headers });
+    if ((res.status !== 429 && res.status < 500) || i >= 4) return res;
+    await new Promise((r) => setTimeout(r, 5000 * 2 ** i));
+  }
+};
+
 const PAD = 0.0015; // same padding as loadCourse in src/overpass.ts
 const dir = new URL('../src/courses/osm/', import.meta.url);
 mkdirSync(dir, { recursive: true });
